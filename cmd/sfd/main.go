@@ -10,10 +10,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	gomoufox "github.com/ehmo/gomoufox"
+	"github.com/ehmo/gomoufox/camoufoxcfg"
 )
 
 type request struct {
@@ -72,7 +74,16 @@ func main() {
 	logf("监听 %s（dsh_pid=%d, idle=%ds）", *sock, *dshPID, *idle)
 
 	ctx := context.Background()
-	browser, err := gomoufox.New(ctx)
+	var newOpts []gomoufox.Option
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SF_HEADLESS"))) {
+	case "false":
+		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessFalse))
+	case "true":
+		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessTrue))
+	default:
+		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessVirtual))
+	}
+	browser, err := gomoufox.New(ctx, newOpts...)
 	if err != nil {
 		logf("浏览器启动失败: %v", err)
 		return

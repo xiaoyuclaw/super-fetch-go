@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gomoufox "github.com/ehmo/gomoufox"
+	"github.com/ehmo/gomoufox/camoufoxcfg"
 )
 
 // GomoufoxEnabled 判断是否走 Camoufox（gomoufox）通道。
@@ -82,7 +83,16 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 			mark = time.Now()
 		}
 	}
-	b, err := gomoufox.New(bootCtx)
+	var newOpts []gomoufox.Option
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SF_HEADLESS"))) {
+	case "false":
+		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessFalse))
+	case "true":
+		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessTrue))
+	default:
+		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessVirtual))
+	}
+	b, err := gomoufox.New(bootCtx, newOpts...)
 	if err != nil {
 		return "", "", fmt.Errorf("gomoufox 启动失败: %w", err)
 	}
