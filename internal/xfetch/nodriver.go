@@ -61,11 +61,15 @@ func FetchWithNodriver(rawURL, sessionFile string, opts BrowserOptions) (string,
 		"--disable-blink-features=AutomationControlled",
 		"--disable-dev-shm-usage",
 		"--no-sandbox",
-		"--window-position=-2400,-2400",
+		"--window-position=-32000,-32000",
 		"--window-size=1280,900",
+		"--ozone-platform=x11",
 		"--lang=zh-CN",
 	}
 	if strings.EqualFold(os.Getenv("SF_HEADLESS"), "true") {
+		args = append(args, "--headless=new")
+	}
+	if os.Getenv("SF_NODRIVER_HEADED") != "1" {
 		args = append(args, "--headless=new")
 	}
 	cmd := exec.Command(exe, args...)
