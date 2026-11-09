@@ -56,6 +56,7 @@ type reqMeta struct {
 
 // Probe 在浏览器里执行 JS 或捕获接口请求，返回 JSON 字符串。
 func Probe(opts BrowserOptions, rawURL, sessionFile, evalJS string, xhrPattern *string, replay bool, replaces []string) (string, error) {
+	opts.ForceChromedp = true // eval/discover 需要 CDP，固定走 chromedp
 	b, err := LaunchBrowser(opts)
 	if err != nil {
 		return "", err

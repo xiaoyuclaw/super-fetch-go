@@ -24,17 +24,18 @@ import (
 
 // BrowserOptions 浏览器通道参数。
 type BrowserOptions struct {
-	Headless     bool
-	Show         bool
-	Proxy        string
-	Timeout      int
-	Wait         int
-	Interactive  bool
-	Width        int
-	Height       int
-	ExecPath     string
-	WaitSelector string
-	Stable       bool
+	Headless      bool
+	Show          bool
+	Proxy         string
+	Timeout       int
+	Wait          int
+	Interactive   bool
+	Width         int
+	Height        int
+	ExecPath      string
+	WaitSelector  string
+	Stable        bool
+	ForceChromedp bool
 }
 
 // Browser 一个可复用的浏览器实例。
@@ -102,7 +103,7 @@ func LaunchBrowser(opts BrowserOptions) (*Browser, error) {
 		opts.Timeout = 30
 	}
 	// gomoufox / nodriver：不需要常驻 chromedp 分配器，按需启动
-	if !opts.Interactive {
+	if !opts.Interactive && !opts.ForceChromedp {
 		if kind := BackendKind(); kind != "chromedp" {
 			return &Browser{opts: opts, kind: kind, useGomoufox: kind == "gomoufox"}, nil
 		}

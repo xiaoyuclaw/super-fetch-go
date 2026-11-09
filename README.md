@@ -21,6 +21,10 @@ SF_HEADLESS=virtual|true|false                 # gomoufox 默认 virtual
 **三种后端都支持按需预热（daemon）**：首次抓取自动拉起 `bin/sfd --backend X`，
 之后复用；单实例 flock、随 DSH 退出、空闲 15 分钟退出。
 
+**功能一致性**（三种后端都已验证）：普通抓取、会话保存/恢复（`-s` + `--remember`）、
+`--eval`、`--discover`、`--embedded`、批量 `-F`、交互登录 `-i`、`sv` 浏览器通道。
+其中 `--eval` / `--discover` / `-i` 固定走 chromedp（需要 CDP），其余按 `SF_BROWSER` 选择。
+
 > 内存约束：这台机器只有 6G，**同一时间只保留一个 daemon**——
 > 切换后端时客户端会先杀掉其它后端的 daemon（按 `<sock>.pid`）。
 > 禁用 daemon：`SF_NO_DAEMON=1`。

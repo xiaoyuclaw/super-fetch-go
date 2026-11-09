@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	gomoufox "github.com/ehmo/gomoufox"
 	"github.com/ehmo/gomoufox/camoufoxcfg"
@@ -191,7 +193,16 @@ func newGomoufox(ctx context.Context) (func(request) (string, error), func()) {
 		if req.Wait > 0 {
 			time.Sleep(time.Duration(req.Wait * float64(time.Second)))
 		}
-		return page.Content(ctx)
+		html, err := page.Content(ctx)
+		if err == nil && req.Session != "" {
+			if cookies, cerr := page.Cookies(ctx); cerr == nil && len(cookies) > 0 {
+				st := gomoufox.StorageState{Cookies: cookies}
+				if data, jerr := json.Marshal(st); jerr == nil {
+					_ = os.WriteFile(req.Session, data, 0o600)
+				}
+			}
+		}
+		return html, err
 	}
 	return fetch, func() { b.Close() }
 }
@@ -300,6 +311,79 @@ func newNodriver(ctx context.Context) (func(request) (string, error), func()) {
 	return fetch, func() { browserStop(); allocStop(); kill() }
 }
 
+type stateCookie struct {
+	Name     string  `json:"name"`
+	Value    string  `json:"value"`
+	Domain   string  `json:"domain"`
+	Path     string  `json:"path"`
+	Expires  float64 `json:"expires"`
+	HTTPOnly bool    `json:"httpOnly"`
+	Secure   bool    `json:"secure"`
+	SameSite string  `json:"sameSite"`
+}
+
+type storageState struct {
+	Cookies []stateCookie    `json:"cookies"`
+	Origins []map[string]any `json:"origins"`
+}
+
+func applySession(ctx context.Context, path string) {
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var st storageState
+	if json.Unmarshal(data, &st) != nil || len(st.Cookies) == 0 {
+		return
+	}
+	params := make([]*network.CookieParam, 0, len(st.Cookies))
+	for _, c := range st.Cookies {
+		cp := &network.CookieParam{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			Secure:   c.Secure,
+			HTTPOnly: c.HTTPOnly,
+		}
+		if c.Expires > 0 {
+			v := cdp.TimeSinceEpoch(time.Unix(int64(c.Expires), 0))
+			cp.Expires = &v
+		}
+		params = append(params, cp)
+	}
+	_ = chromedp.Run(ctx, network.SetCookies(params))
+}
+
+func saveSession(ctx context.Context, path string) {
+	if path == "" {
+		return
+	}
+	var cookies []*network.Cookie
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
+		var err error
+		cookies, err = network.GetCookies().Do(c)
+		return err
+	})); err != nil || len(cookies) == 0 {
+		return
+	}
+	st := storageState{Cookies: make([]stateCookie, 0, len(cookies))}
+	for _, c := range cookies {
+		sc := stateCookie{Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
+			HTTPOnly: c.HTTPOnly, Secure: c.Secure}
+		if c.Expires > 0 {
+			sc.Expires = float64(c.Expires)
+		}
+		st.Cookies = append(st.Cookies, sc)
+	}
+	if data, err := json.Marshal(st); err == nil {
+		_ = os.WriteFile(path, data, 0o600)
+	}
+}
+
 func fetchTab(browserCtx context.Context, req request) (string, error) {
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -309,12 +393,16 @@ func fetchTab(browserCtx context.Context, req request) (string, error) {
 	defer cancelTab()
 	tabCtx, cancelTO := context.WithTimeout(tabCtx, time.Duration(timeout+20)*time.Second)
 	defer cancelTO()
+	applySession(tabCtx, req.Session)
 	var html string
 	err := chromedp.Run(tabCtx,
 		chromedp.Navigate(req.URL),
 		chromedp.Sleep(time.Duration(req.Wait*float64(time.Second))),
 		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
 	)
+	if err == nil {
+		saveSession(tabCtx, req.Session)
+	}
 	return html, err
 }
 
