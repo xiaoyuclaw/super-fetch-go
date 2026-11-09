@@ -236,8 +236,6 @@ func parseArgs(args []string) (*options, error) {
 		o.Engine = "cffi"
 	case "browser":
 		o.Engine = "playwright"
-	case "api":
-		o.Engine = "api"
 	case "auto", "cffi", "playwright":
 	default:
 		o.Engine = "auto"
@@ -249,7 +247,7 @@ func printHelp() {
 	fmt.Fprint(os.Stderr, `Super Fetch - 高性能抓取基座（Go 版）
 
 通道：
-  --via/-e auto|cffi|playwright|http|browser|api  默认 auto；api = 发现接口后用 cffi 直取
+  --via/-e auto|cffi|playwright|http|browser   默认 auto（先 HTTP，按需升浏览器）
 通用：--sites [DOMAIN] --remember -f/--full -s/--session -w/--wait -t/--timeout
       --auto-threshold -p/--proxy -r/--retries -o/--output
 单 URL：-i/--login -L/--level brief|normal|full -m/--max-chars -j/--json -l/--links
@@ -421,48 +419,6 @@ func runSingle(o *options, sessionPath string) int {
 
 	if site := xdb.FindSite(url); site != nil && !o.JSON {
 		stderr("[*] 📚 接口库中有记录: %s %s（参考，不自动发请求）\n", site.Method, site.Endpoint)
-	}
-
-	// --via api：发现接口 → cffi 直取（浏览器只负责发现）
-	if o.Engine == "api" {
-		stderr("[*] api 分支开始 (%.2fs)\n", time.Since(progStart).Seconds())
-		res, err := xfetch.FetchViaAPI(optsToBrowser(o, false), url, sessionPath)
-		if err != nil {
-			if o.JSON {
-				printJSON(map[string]any{"error": err.Error(), "url": url, "via": "api"})
-			} else {
-				stderr("[*] ❌ 接口发现失败: %v\n", err)
-			}
-			return 1
-		}
-		if o.JSON {
-			printJSON(map[string]any{
-				"url": url, "via": "api", "chars": len(res.Body),
-				"picked": res.Picked, "candidates": res.Candidates,
-			})
-			return 0
-		}
-		stderr("[*] ✅ 接口直取: %s（%d 条 / %d 字节）\n", res.Picked.URL, res.Picked.Items, res.Picked.Bytes)
-		out := res.Body
-		if o.Level == "brief" || (o.MaxChars != nil && len(out) > *o.MaxChars) {
-			limit := 800
-			if o.MaxChars != nil {
-				limit = *o.MaxChars
-			}
-			if len(out) > limit {
-				out = out[:limit] + "\n…（已截断）"
-			}
-		}
-		if o.Output != "" {
-			if err := os.WriteFile(o.Output, []byte(res.Body), 0o644); err != nil {
-				stderr("[*] ❌ 写入失败: %v\n", err)
-				return 1
-			}
-			stderr("[*] ✅ 已保存: %s\n", o.Output)
-			return 0
-		}
-		fmt.Println(out)
-		return 0
 	}
 
 	// --discover / --eval 探针模式

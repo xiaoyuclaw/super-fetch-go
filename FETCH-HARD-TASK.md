@@ -110,7 +110,7 @@
 | **S-browser** | 全程 `--via browser`（nodriver） | 稳但慢多少 |
 | **S-http** | 纯 cffi（能到哪一步） | 纯 HTTP 的天花板 |
 | **S-mixed** | discover/embedded 找到接口 + http 直取 | 是否绕开渲染 |
-| **S-discovery3** | 三步走：浏览器发现接口 → **AI 判断**用不用接口 → cffi 抓；可多轮 | 发现成本 vs 抓取收益 |
+| **S-discovery3** | 三步走（**流程，不是参数**）：`--discover` 发现 → agent 判断 → `--via http` 取数；可多轮 | 发现成本 vs 抓取收益 |
 | **S-session** | 带 `-s` 热启动 | 登录态的代价 |
 
 > 每个任务不必五条都跑满：H1 跑 auto/browser/http；H2 跑 auto/http；
@@ -139,8 +139,8 @@
 - **第 2 步必须由 AI 判断**，不能只靠「body 是不是 JSON」这种机械规则——
   埋点接口、配置接口、推荐位接口也都是 JSON，得看内容才分得清。
 - **可以多轮**：先发现列表接口，再对详情页发现详情接口。
-- 一旦接口确定，`sf --via api` 会把结论缓存到 `.data/api-cache.json`，
-  之后同站直接 cffi，热启动 0.3–0.5s。
+- 这套流程写在 `STRATEGIES.md`（策略三），**不是命令行参数**：工具只提供
+  `--discover` / `--verify` / `--via http` 三个原语，判断由 agent 做。
 
 ---
 

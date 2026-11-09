@@ -15,7 +15,7 @@
 | 维度 | 取值 |
 |---|---|
 | 默认策略 | `sf "<url>"`（auto：cffi → 内嵌数据 → 浏览器兜底） |
-| 其他策略 | `--via http` / `--via api`（发现接口后 cffi 直取）/ `--embedded` / `--discover` / `--via browser` / `--eval` / `-F` 批量 |
+| 其他策略 | `--via http` / `--embedded` / `--discover`（配合 `--via http` 取接口数据）/ `--via browser` / `--eval` / `-F` 批量 |
 | 浏览器后端 | `SF_BROWSER=nodriver`（默认）/ `chromedp` / `gomoufox` |
 | 输出档位 | `-L brief` / `-L normal` / `-L full`（体积与 token 口径） |
 

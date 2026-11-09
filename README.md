@@ -7,6 +7,7 @@
 
 - `BENCHMARK-TASK.md` — 抓取性能评测任务（sf vs 内置 web_fetch 的测法与口径，含内容质量 8 项指标）
 - `FETCH-HARD-TASK.md` — 困难抓取任务评测（多页/反爬/登录/接口发现），对比 auto、cffi、全浏览器、discover 等策略
+- `STRATEGIES.md` — 策略判断手册（HTTP / 浏览器 / 三步走接口发现 / 内嵌数据 / 登录态）
 
 ## 浏览器后端（三种，SF_BROWSER 切换，默认 nodriver）
 
