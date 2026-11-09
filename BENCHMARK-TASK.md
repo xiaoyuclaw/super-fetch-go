@@ -51,11 +51,69 @@ DSH 宿主进程内的工具，无 CLI。耗时必须从会话日志反推（见
 | **墙钟耗时** | 进程启动到退出（sf），或工具调用到结果返回（内置） | `date +%s.%N` 前后差 / 日志时间戳 |
 | **通道命中** | cffi / embedded / browser / playwright | sf 的 stderr `[*] 📝 提取内容... [x]` 或 `-j` 的 `via` |
 | **正文体积** | 输出字符数 | `wc -c` / JSON 的 `content` 长度 |
+| **内容质量** | 见 3.5 的 8 项指标 | `/tmp/quality.py <输出文件>` |
 | **成功率** | 拿到有效正文且 rc=0 的比例 | 人工判定 |
 | **稳定性** | 同一用例 3 次的最大/最小差 | 记录 3 次值 |
 | **token 成本**（可选） | 输出字符 ÷ 1.5 估算，或内置会话 usage 实测 | 见 5.3 |
 
 > 统一口径：**耗时保留两位小数，取中位数**；失败样本单独列出，不混进平均。
+
+---
+
+## 3.5 内容质量量化（必测，不能只看速度）
+
+速度之外，每条结果都要算下面这些指标。脚本见本节末，直接跑即可。
+
+| 指标 | 含义 | 好坏方向 |
+|---|---|---|
+| `link_ratio` | Markdown 链接字符 / 总字符 | 列表页高正常；文章页 >0.6 说明正文被导航淹没 |
+| `img_ratio` | 图片占位符字符（含 base64）/ 总字符 | 越低越好；>0.3 基本是垃圾 |
+| `imgs` | 图片占位符个数 | 同上 |
+| `nav_line_ratio` | 命中导航词（首页/登录/注册/更多/版权/ICP/联系我们…）的行占比 | 越低越好，>0.15 说明没做正文抽取 |
+| `short_line_ratio` | ≤8 字的行占比 | 越高越像目录/导航碎片 |
+| `dup_line_ratio` | 出现 ≥3 次的重复行占比 | 越高说明模板块没去掉 |
+| `headings` | 标题行数 | 反映结构保留程度 |
+| `avg_line` | 平均行长 | 长文应显著大于列表页 |
+| `chars` | 正文字符数 | 结合上面几个看，不是越大越好 |
+
+**「正文命中率」补充指标**（可选，更贴近实用性）：
+
+- 取页面 `<title>` 里 2–3 个关键词，统计它们在输出正文中的出现次数；
+- 或人工摘 3 句正文，算输出里这些句子的字符覆盖率。
+
+**判定**：
+
+- 干净：`img_ratio < 0.05`、`nav_line_ratio < 0.05`、`dup_line_ratio < 0.02`
+- 有噪音：任一指标超 2 倍但正文主体仍在
+- 噪音为主：`img_ratio > 0.3` 或 `nav_line_ratio > 0.15` 或正文关键词几乎不出现
+
+**脚本**（`/tmp/quality.py`，无第三方依赖）：
+
+```python
+import re, sys, json
+NAV = ("首页","登录","注册","更多","版权","ICP备","联系我们","隐私政策","关于我们",
+       "下载客户端","无障碍","网站地图","分享到","扫码","关注我们","返回顶部")
+def metrics(md):
+    lines=[l.strip() for l in md.splitlines() if l.strip()]
+    total=sum(len(l) for l in lines) or 1
+    link=sum(len(x) for l in lines for x in re.findall(r'\[[^\]]*\]\([^)]*\)',l))
+    imgc=sum(len(x) for x in re.findall(r'!\[[^\]]*\]\([^)]*\)',md))
+    return dict(chars=total, lines=len(lines),
+        link_ratio=round(link/total,3), img_ratio=round(imgc/total,3),
+        imgs=len(re.findall(r'!\[[^\]]*\]',md)),
+        nav_line_ratio=round(sum(1 for l in lines if any(w in l for w in NAV))/len(lines),3),
+        short_line_ratio=round(sum(1 for l in lines if len(l)<=8)/len(lines),3),
+        dup_line_ratio=round(sum(1 for l in set(lines) if lines.count(l)>=3)/len(lines),3),
+        headings=sum(1 for l in lines if l.startswith('#')),
+        avg_line=round(total/len(lines),1))
+for p in sys.argv[1:]:
+    print(p, json.dumps(metrics(open(p).read()), ensure_ascii=False))
+```
+
+**内置 web_fetch 的质量怎么算**：日志里的返回文本可能被中段裁剪（`[... middle pruned ...]`），
+所以它的 `chars` 是下界、比例类指标会偏；**比例仍可比**（同样的裁剪不影响图片/导航占比的大致判断）。
+要精确值，改用 5.3 的「扣减法」在同一会话里抓两次，或直接对内置返回的完整首尾片段人工核对。
+
 
 ---
 
@@ -231,4 +289,5 @@ sf 的 `-L brief` 是硬截断（800 字），可直接对比。会话日志里 
 2. 跑 sf 语料：第 2 节 10 个 URL × {默认, --via http, --via browser}，记 5.1/5.2 数据
 3. 跑三种浏览器后端各一轮（nodriver / chromedp / gomoufox），冷热分开
 4. 跑内置 web_fetch：同一批 URL，串行调用，按 5.3 从日志取时间
-5. 填第 6 节表格，按第 7 节下结论，写进 `RESULTS-<日期>.md`
+5. 对每条输出跑 3.5 的质量脚本，把 8 项指标填进结果表
+6. 填第 6 节表格，按第 7 节下结论，写进 `RESULTS-<日期>.md`
