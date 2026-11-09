@@ -294,8 +294,8 @@ func (b *Browser) FetchWithBrowser(rawURL, sessionFile string) (string, string, 
 			return "", "", err
 		}
 	}
-	if !b.useGomoufox {
-		// chromedp / nodriver 也走常驻 daemon（按需拉起，单实例）
+	// 带 session 的请求不走 daemon：登录态读写在进程内更可靠
+	if !b.useGomoufox && sessionFile == "" {
 		if html, ok := FetchViaDaemon(b.kind, rawURL, sessionFile, b.opts.WaitSelector, b.opts.Timeout, 1.0); ok {
 			return html, "text/html", nil
 		}
@@ -359,6 +359,9 @@ func (b *Browser) FetchWithBrowser(rawURL, sessionFile string) (string, string, 
 	_ = chromedp.Run(timeoutCtx, chromedp.Evaluate(`document.contentType || 'text/html'`, &ctype))
 	if ctype == "" {
 		ctype = "text/html"
+	}
+	if sessionFile != "" {
+		_ = b.SaveSession(sessionFile, timeoutCtx)
 	}
 	return html, ctype, nil
 }

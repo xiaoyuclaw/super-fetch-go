@@ -22,7 +22,6 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
-	pagepkg "github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	gomoufox "github.com/ehmo/gomoufox"
 	"github.com/ehmo/gomoufox/camoufoxcfg"
@@ -113,6 +112,9 @@ func main() {
 	var handler func(request) (string, error)
 	var cleanup func()
 
+	// 先清上次的残留，再启动新浏览器（顺序反了会把刚启动的浏览器一起杀掉）
+	reapStaleBrowsers()
+
 	// 先把浏览器启动好（慢的 gomoufox 要 30s+），再对外监听
 	switch *backend {
 	case "gomoufox":
@@ -128,7 +130,6 @@ func main() {
 		os.Remove(*sock + ".pid")
 		return
 	}
-	reapStaleBrowsers()
 	logf("%s 浏览器已常驻", *backend)
 
 	_ = os.Remove(*sock)
@@ -187,7 +188,9 @@ func main() {
 				writeJSON(c, response{Error: "bad request"})
 				return
 			}
+			logf("请求 url=%s session=%q selector=%q", req.URL, req.Session, req.Selector)
 			html, err := handler(req)
+			logf("结果 err=%v len=%d", err, len(html))
 			if err != nil {
 				writeJSON(c, response{Error: err.Error()})
 			} else {
@@ -300,8 +303,9 @@ func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
 		allocStop()
 		return nil, func() {}
 	}
-	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
-	return fetch, func() { browserStop(); allocStop(); os.RemoveAll(profile) }
+	tabCtx, tabCancel := chromedp.NewContext(browserCtx)
+	fetch := func(req request) (string, error) { return fetchTab(tabCtx, req) }
+	return fetch, func() { tabCancel(); browserStop(); allocStop(); os.RemoveAll(profile) }
 }
 
 // ---------- nodriver（系统 Chrome + 远程调试端口） ----------
@@ -365,8 +369,9 @@ func newNodriver(ctx context.Context) (func(request) (string, error), func()) {
 		kill()
 		return nil, func() {}
 	}
-	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
-	return fetch, func() { browserStop(); allocStop(); kill() }
+	tabCtx, tabCancel := chromedp.NewContext(browserCtx)
+	fetch := func(req request) (string, error) { return fetchTab(tabCtx, req) }
+	return fetch, func() { tabCancel(); browserStop(); allocStop(); kill() }
 }
 
 type stateCookie struct {
@@ -418,6 +423,7 @@ func applySession(ctx context.Context, path string) {
 
 func saveSession(ctx context.Context, path string) {
 	if path == "" {
+		logf("saveSession: 没有 session 路径")
 		return
 	}
 	var cookies []*network.Cookie
@@ -426,6 +432,7 @@ func saveSession(ctx context.Context, path string) {
 		cookies, err = network.GetCookies().Do(c)
 		return err
 	})); err != nil || len(cookies) == 0 {
+		logf("saveSession: 取 cookie 失败 err=%v count=%d", err, len(cookies))
 		return
 	}
 	st := storageState{Cookies: make([]stateCookie, 0, len(cookies))}
@@ -438,30 +445,26 @@ func saveSession(ctx context.Context, path string) {
 		st.Cookies = append(st.Cookies, sc)
 	}
 	if data, err := json.Marshal(st); err == nil {
-		_ = os.WriteFile(path, data, 0o600)
+		if werr := os.WriteFile(path, data, 0o600); werr != nil {
+			logf("saveSession: 写文件失败 %v", werr)
+		}
 	}
 }
 
-func fetchTab(browserCtx context.Context, req request) (string, error) {
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = 30
-	}
-	tabCtx, cancelTab := chromedp.NewContext(browserCtx)
-	defer cancelTab()
-	tabCtx, cancelTO := context.WithTimeout(tabCtx, time.Duration(timeout+20)*time.Second)
-	defer cancelTO()
+func fetchTab(tabCtx context.Context, req request) (string, error) {
 	applySession(tabCtx, req.Session)
+	// 导航给 15s：拿不到 load 事件也继续（bing 这类站会一直挂着），后面靠 selector/wait 兜
+	navCtx, navCancel := context.WithTimeout(tabCtx, 15*time.Second)
+	navErr := chromedp.Run(navCtx, chromedp.Navigate(req.URL))
+	navCancel()
+	if navErr != nil {
+		logf("导航未完成（继续）: %v", navErr)
+	}
+	if req.Wait > 0 {
+		time.Sleep(time.Duration(req.Wait * float64(time.Second)))
+	}
 	var html string
-	err := chromedp.Run(tabCtx,
-		// page.Navigate 不等待 load 事件（bing 这类站会挂很久），DOM 就绪即可
-		chromedp.ActionFunc(func(c context.Context) error {
-			_, _, _, err := pagepkg.Navigate(req.URL).Do(c)
-			return err
-		}),
-		chromedp.Sleep(time.Duration(req.Wait*float64(time.Second))),
-		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
-	)
+	err := chromedp.Run(tabCtx, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
 	if err == nil {
 		waitForSelector(tabCtx, req.Selector, 6*time.Second)
 		_ = chromedp.Run(tabCtx, chromedp.OuterHTML("html", &html, chromedp.ByQuery))

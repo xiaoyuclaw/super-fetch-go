@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -98,6 +99,7 @@ func FetchWithNodriver(rawURL, sessionFile string, opts BrowserOptions) (string,
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, time.Duration(opts.Timeout)*time.Second)
 	defer timeoutCancel()
 
+	applyNodriverSession(tabCtx, sessionFile)
 	var html string
 	actions := []chromedp.Action{
 		chromedp.Navigate(rawURL),
@@ -107,7 +109,68 @@ func FetchWithNodriver(rawURL, sessionFile string, opts BrowserOptions) (string,
 	if err := chromedp.Run(tabCtx, actions...); err != nil {
 		return "", "", err
 	}
+	saveNodriverSession(tabCtx, sessionFile)
 	return html, "text/html", nil
+}
+
+type stateCookie struct {
+	Name     string  `json:"name"`
+	Value    string  `json:"value"`
+	Domain   string  `json:"domain"`
+	Path     string  `json:"path"`
+	Expires  float64 `json:"expires"`
+	HTTPOnly bool    `json:"httpOnly"`
+	Secure   bool    `json:"secure"`
+	SameSite string  `json:"sameSite"`
+}
+
+type storageState struct {
+	Cookies []stateCookie    `json:"cookies"`
+	Origins []map[string]any `json:"origins"`
+}
+
+func applyNodriverSession(ctx context.Context, path string) {
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var st storageState
+	if json.Unmarshal(data, &st) != nil || len(st.Cookies) == 0 {
+		return
+	}
+	params := make([]*network.CookieParam, 0, len(st.Cookies))
+	for _, c := range st.Cookies {
+		cp := &network.CookieParam{Name: c.Name, Value: c.Value, Domain: c.Domain,
+			Path: c.Path, Secure: c.Secure, HTTPOnly: c.HTTPOnly}
+		params = append(params, cp)
+	}
+	_ = chromedp.Run(ctx, network.SetCookies(params))
+}
+
+func saveNodriverSession(ctx context.Context, path string) {
+	if path == "" {
+		return
+	}
+	var cookies []*network.Cookie
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
+		var err error
+		cookies, err = network.GetCookies().Do(c)
+		return err
+	})); err != nil || len(cookies) == 0 {
+		return
+	}
+	st := storageState{Cookies: make([]stateCookie, 0, len(cookies))}
+	for _, c := range cookies {
+		st.Cookies = append(st.Cookies, stateCookie{Name: c.Name, Value: c.Value,
+			Domain: c.Domain, Path: c.Path, HTTPOnly: c.HTTPOnly, Secure: c.Secure,
+			Expires: float64(c.Expires)})
+	}
+	if data, err := json.Marshal(st); err == nil {
+		_ = os.WriteFile(path, data, 0o600)
+	}
 }
 
 func waitDevToolsPort(profile string, d time.Duration) (string, error) {
