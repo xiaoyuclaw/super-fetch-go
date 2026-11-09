@@ -3,6 +3,7 @@ package xfetch
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ type ReplayResult struct {
 	Seconds  float64 `json:"seconds"`
 	Bytes    int     `json:"bytes"`
 	BodyHead string  `json:"body_head,omitempty"`
+	Body     string  `json:"body,omitempty"`
 	Error    string  `json:"error,omitempty"`
 }
 
@@ -259,6 +261,18 @@ func replayCaptured(entry Captured, cookies map[string]string) ReplayResult {
 	}
 
 	start := time.Now()
+	if method == http.MethodGet || method == "" {
+		// GET 用标准抓取通道：带完整 Chrome 头序，服务端不会当成爬虫排队
+		r, err := client.Fetch(target, "")
+		secs := time.Since(start).Seconds()
+		if err != nil {
+			return ReplayResult{Error: err.Error(), Seconds: round2(secs)}
+		}
+		return ReplayResult{
+			Status: r.Status, Seconds: round2(secs), Bytes: len(r.Body),
+			BodyHead: truncate(string(r.Body), 3000), Body: string(r.Body),
+		}
+	}
 	resp, err := client.RawRequest(method, target, entry.RequestBody)
 	secs := time.Since(start).Seconds()
 	if err != nil {
@@ -269,6 +283,7 @@ func replayCaptured(entry Captured, cookies map[string]string) ReplayResult {
 		Seconds:  round2(secs),
 		Bytes:    len(resp.BodyData),
 		BodyHead: truncate(string(resp.BodyData), 3000),
+		Body:     string(resp.BodyData),
 	}
 }
 

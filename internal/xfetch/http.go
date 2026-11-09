@@ -48,6 +48,7 @@ type Response struct {
 	Body        []byte
 	ContentType string
 	IsBinary    bool
+	Status      int
 }
 
 // Text 按响应头/页面 meta 的字符集解码正文。
@@ -190,7 +191,7 @@ func (c *Client) FetchWithReferer(rawURL, sessionFile, referer string) (*Respons
 		return nil, &HTTPError{Status: resp.StatusCode, URL: rawURL}
 	}
 	ct := resp.Header.Get("content-type")
-	return &Response{Body: body, ContentType: ct, IsBinary: IsBinaryType(ct)}, nil
+	return &Response{Status: resp.StatusCode, Body: body, ContentType: ct, IsBinary: IsBinaryType(ct)}, nil
 }
 
 // FetchOnce 便捷函数：单次抓取（内部建客户端）。

@@ -66,12 +66,6 @@ func FetchWithNodriver(rawURL, sessionFile string, opts BrowserOptions) (string,
 		"--ozone-platform=x11",
 		"--lang=zh-CN",
 	}
-	if strings.EqualFold(os.Getenv("SF_HEADLESS"), "true") {
-		args = append(args, "--headless=new")
-	}
-	if os.Getenv("SF_NODRIVER_HEADED") != "1" {
-		args = append(args, "--headless=new")
-	}
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

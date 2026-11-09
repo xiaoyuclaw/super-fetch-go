@@ -332,10 +332,6 @@ func newNodriver(ctx context.Context) (func(request) (string, error), func()) {
 		"--ozone-platform=x11",
 		"--lang=zh-CN",
 	}
-	if os.Getenv("SF_NODRIVER_HEADED") != "1" {
-		// 默认无头：daemon 常驻不能占用户桌面（GNOME/Wayland 忽略 --window-position）
-		args = append(args, "--headless=new")
-	}
 	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
