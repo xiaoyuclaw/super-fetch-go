@@ -35,7 +35,8 @@ SF_HEADLESS=virtual|true|false                 # gomoufox 默认 virtual
   gomoufox 用它自己的），daemon 退出就清掉。
 - **session 文件（Playwright storageState）跨后端通用**：`-s 名字.json` 读入注入，
   `--remember` 抓完写回；三种后端都已用 httpbin cookie 往返验证。
-- 不带 `-s` 时 cookie 只活在当前 daemon 的浏览器里，不落盘、换后端就没了。
+- **带 `-s` 也走常驻 daemon（热启动）**：`sf "<url>" --via browser -s x.json` 热起来 1.7s 左右；
+  `<!-- -->` 想强制新开浏览器（不碰 daemon）：加 `--fresh`。
 
 > 内存约束：这台机器只有 6G，**同一时间只保留一个 daemon**——
 > 切换后端时客户端会先杀掉其它后端的 daemon（按 `<sock>.pid`）。

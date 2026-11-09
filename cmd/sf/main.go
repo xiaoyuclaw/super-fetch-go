@@ -40,6 +40,7 @@ type options struct {
 	JSON           bool
 	Links          bool
 	EvalJS         string
+	Fresh          bool
 	XHR            *string
 	Replace        []string
 	Replay         bool
@@ -115,6 +116,8 @@ func parseArgs(args []string) (*options, error) {
 			o.Remember = true
 		case "--full", "-f":
 			o.Full = true
+		case "--fresh":
+			o.Fresh = true
 		case "--session", "-s":
 			v, _ := optional("session.json")
 			o.Session, o.SessionSet = v, true
@@ -347,6 +350,7 @@ func optsToBrowser(o *options, interactive bool) xfetch.BrowserOptions {
 		Timeout:     o.Timeout,
 		Wait:        o.Wait,
 		Interactive: interactive,
+		NoDaemon:    o.Fresh,
 	}
 }
 

@@ -303,9 +303,8 @@ func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
 		allocStop()
 		return nil, func() {}
 	}
-	tabCtx, tabCancel := chromedp.NewContext(browserCtx)
-	fetch := func(req request) (string, error) { return fetchTab(tabCtx, req) }
-	return fetch, func() { tabCancel(); browserStop(); allocStop(); os.RemoveAll(profile) }
+	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
+	return fetch, func() { browserStop(); allocStop(); os.RemoveAll(profile) }
 }
 
 // ---------- nodriver（系统 Chrome + 远程调试端口） ----------
@@ -369,9 +368,8 @@ func newNodriver(ctx context.Context) (func(request) (string, error), func()) {
 		kill()
 		return nil, func() {}
 	}
-	tabCtx, tabCancel := chromedp.NewContext(browserCtx)
-	fetch := func(req request) (string, error) { return fetchTab(tabCtx, req) }
-	return fetch, func() { tabCancel(); browserStop(); allocStop(); kill() }
+	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
+	return fetch, func() { browserStop(); allocStop(); kill() }
 }
 
 type stateCookie struct {
@@ -451,24 +449,35 @@ func saveSession(ctx context.Context, path string) {
 	}
 }
 
-func fetchTab(tabCtx context.Context, req request) (string, error) {
-	applySession(tabCtx, req.Session)
+func fetchTab(browserCtx context.Context, req request) (string, error) {
+	tabCtx, cancelTab := chromedp.NewContext(browserCtx)
+	defer cancelTab()
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = 30
+	}
+	reqCtx, cancel := context.WithTimeout(tabCtx, time.Duration(timeout+15)*time.Second)
+	defer cancel()
+
+	applySession(reqCtx, req.Session)
+
 	// 导航给 15s：拿不到 load 事件也继续（bing 这类站会一直挂着），后面靠 selector/wait 兜
-	navCtx, navCancel := context.WithTimeout(tabCtx, 15*time.Second)
+	navCtx, navCancel := context.WithTimeout(reqCtx, 15*time.Second)
+	defer navCancel() // 不能立即 cancel：会让标签页脱离目标，后续 Evaluate 卡死
 	navErr := chromedp.Run(navCtx, chromedp.Navigate(req.URL))
-	navCancel()
 	if navErr != nil {
 		logf("导航未完成（继续）: %v", navErr)
 	}
 	if req.Wait > 0 {
 		time.Sleep(time.Duration(req.Wait * float64(time.Second)))
 	}
+	waitForSelector(reqCtx, req.Selector, 6*time.Second)
+
 	var html string
-	err := chromedp.Run(tabCtx, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
-	if err == nil {
-		waitForSelector(tabCtx, req.Selector, 6*time.Second)
-		_ = chromedp.Run(tabCtx, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
-		saveSession(tabCtx, req.Session)
+	err := chromedp.Run(reqCtx, chromedp.Evaluate(
+		"document.documentElement ? document.documentElement.outerHTML : ''", &html))
+	if err == nil && req.Session != "" {
+		saveSession(reqCtx, req.Session)
 	}
 	return html, err
 }

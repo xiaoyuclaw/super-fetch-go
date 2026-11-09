@@ -37,6 +37,7 @@ type BrowserOptions struct {
 	WaitSelector  string
 	Stable        bool
 	ForceChromedp bool
+	NoDaemon      bool
 }
 
 // Browser 一个可复用的浏览器实例。
@@ -294,8 +295,9 @@ func (b *Browser) FetchWithBrowser(rawURL, sessionFile string) (string, string, 
 			return "", "", err
 		}
 	}
-	// 带 session 的请求不走 daemon：登录态读写在进程内更可靠
-	if !b.useGomoufox && sessionFile == "" {
+	// nodriver/chromedp 的 -s 先走进程内（daemon 里 CDP cookie 读写不稳）；
+	// gomoufox 的 session 在 daemon 里可靠，保持热启动
+	if !b.useGomoufox && !b.opts.NoDaemon {
 		if html, ok := FetchViaDaemon(b.kind, rawURL, sessionFile, b.opts.WaitSelector, b.opts.Timeout, 1.0); ok {
 			return html, "text/html", nil
 		}
