@@ -22,16 +22,18 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
+	pagepkg "github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	gomoufox "github.com/ehmo/gomoufox"
 	"github.com/ehmo/gomoufox/camoufoxcfg"
 )
 
 type request struct {
-	URL     string  `json:"url"`
-	Session string  `json:"session"`
-	Timeout int     `json:"timeout"`
-	Wait    float64 `json:"wait"`
+	URL      string  `json:"url"`
+	Session  string  `json:"session"`
+	Timeout  int     `json:"timeout"`
+	Wait     float64 `json:"wait"`
+	Selector string  `json:"selector"`
 }
 
 type response struct {
@@ -102,24 +104,16 @@ func main() {
 	}
 	defer lf.Close()
 
-	_ = os.Remove(*sock)
-	ln, err := net.Listen("unix", *sock)
-	if err != nil {
-		logf("监听失败: %v", err)
-		return
-	}
-	_ = os.Chmod(*sock, 0o600)
 	_ = os.WriteFile(*sock+".pid", []byte(fmt.Sprintf("%d", os.Getpid())), 0o600)
 	defer os.Remove(*sock)
 	defer os.Remove(*sock + ".pid")
 	defer os.Remove(*sock + ".lock")
 
-	logf("监听 %s（backend=%s, dsh_pid=%d, idle=%ds）", *sock, *backend, *dshPID, *idle)
-
 	ctx := context.Background()
 	var handler func(request) (string, error)
 	var cleanup func()
 
+	// 先把浏览器启动好（慢的 gomoufox 要 30s+），再对外监听
 	switch *backend {
 	case "gomoufox":
 		handler, cleanup = newGomoufox(ctx)
@@ -131,10 +125,20 @@ func main() {
 	defer cleanup()
 	if handler == nil {
 		logf("后端启动失败")
+		os.Remove(*sock + ".pid")
 		return
 	}
 	reapStaleBrowsers()
 	logf("%s 浏览器已常驻", *backend)
+
+	_ = os.Remove(*sock)
+	ln, err := net.Listen("unix", *sock)
+	if err != nil {
+		logf("监听失败: %v", err)
+		return
+	}
+	_ = os.Chmod(*sock, 0o600)
+	logf("监听 %s（backend=%s, dsh_pid=%d, idle=%ds）", *sock, *backend, *dshPID, *idle)
 
 	shutdown := func(reason string) {
 		logf("%s，关闭", reason)
@@ -216,6 +220,7 @@ func newGomoufox(ctx context.Context) (func(request) (string, error), func()) {
 			if data, err := os.ReadFile(req.Session); err == nil {
 				var st gomoufox.StorageState
 				if json.Unmarshal(data, &st) == nil {
+					normalizeCookies(&st)
 					opts = append(opts, gomoufox.WithStorageState(&st))
 				}
 			}
@@ -246,6 +251,19 @@ func newGomoufox(ctx context.Context) (func(request) (string, error), func()) {
 	return fetch, func() { b.Close() }
 }
 
+func normalizeCookies(st *gomoufox.StorageState) {
+	for i := range st.Cookies {
+		switch strings.ToLower(st.Cookies[i].SameSite) {
+		case "strict":
+			st.Cookies[i].SameSite = "Strict"
+		case "none", "no_restriction":
+			st.Cookies[i].SameSite = "None"
+		default:
+			st.Cookies[i].SameSite = "Lax"
+		}
+	}
+}
+
 // ---------- chromedp ----------
 
 func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
@@ -262,8 +280,10 @@ func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
 			}
 		}
 	}
+	profile, _ := os.MkdirTemp("", "sf-cd-")
 	flags := []chromedp.ExecAllocatorOption{
 		chromedp.ExecPath(exe),
+		chromedp.UserDataDir(profile),
 		chromedp.Flag("headless", os.Getenv("SF_HEADLESS") == "true"),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
@@ -272,7 +292,6 @@ func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
 		chromedp.Flag("window-position", "-2400,-2400"),
 		chromedp.Flag("window-size", "1280,900"),
 		chromedp.Flag("lang", "zh-CN"),
-		chromedp.UserDataDir(""),
 	}
 	allocCtx, allocStop := chromedp.NewExecAllocator(context.Background(), flags...)
 	browserCtx, browserStop := chromedp.NewContext(allocCtx)
@@ -282,7 +301,7 @@ func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
 		return nil, func() {}
 	}
 	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
-	return fetch, func() { browserStop(); allocStop() }
+	return fetch, func() { browserStop(); allocStop(); os.RemoveAll(profile) }
 }
 
 // ---------- nodriver（系统 Chrome + 远程调试端口） ----------
@@ -435,11 +454,17 @@ func fetchTab(browserCtx context.Context, req request) (string, error) {
 	applySession(tabCtx, req.Session)
 	var html string
 	err := chromedp.Run(tabCtx,
-		chromedp.Navigate(req.URL),
+		// page.Navigate 不等待 load 事件（bing 这类站会挂很久），DOM 就绪即可
+		chromedp.ActionFunc(func(c context.Context) error {
+			_, _, _, err := pagepkg.Navigate(req.URL).Do(c)
+			return err
+		}),
 		chromedp.Sleep(time.Duration(req.Wait*float64(time.Second))),
 		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
 	)
 	if err == nil {
+		waitForSelector(tabCtx, req.Selector, 6*time.Second)
+		_ = chromedp.Run(tabCtx, chromedp.OuterHTML("html", &html, chromedp.ByQuery))
 		saveSession(tabCtx, req.Session)
 	}
 	return html, err
@@ -491,6 +516,21 @@ func wsURL(port string) (string, error) {
 		return "", fmt.Errorf("没有 webSocketDebuggerUrl")
 	}
 	return v.WS, nil
+}
+
+func waitForSelector(ctx context.Context, sel string, d time.Duration) {
+	if sel == "" {
+		return
+	}
+	expr := fmt.Sprintf("!!document.querySelector(%q)", sel)
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		var ok bool
+		if err := chromedp.Run(ctx, chromedp.Evaluate(expr, &ok)); err == nil && ok {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func writeJSON(c net.Conn, v response) {

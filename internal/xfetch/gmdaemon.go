@@ -14,10 +14,11 @@ import (
 )
 
 type gmRequest struct {
-	URL     string  `json:"url"`
-	Session string  `json:"session"`
-	Timeout int     `json:"timeout"`
-	Wait    float64 `json:"wait"`
+	URL      string  `json:"url"`
+	Session  string  `json:"session"`
+	Timeout  int     `json:"timeout"`
+	Wait     float64 `json:"wait"`
+	Selector string  `json:"selector"`
 }
 
 type gmResponse struct {
@@ -69,13 +70,13 @@ func dshHostPID() int {
 }
 
 // tryDaemon 发一条请求；daemon 不可用返回 false。
-func tryDaemon(backend, url, session string, timeout int, wait float64) (string, bool) {
+func tryDaemon(backend, url, session, selector string, timeout int, wait float64) (string, bool) {
 	conn, err := net.DialTimeout("unix", gmSock(backend), 300*time.Millisecond)
 	if err != nil {
 		return "", false
 	}
 	defer conn.Close()
-	req := gmRequest{URL: url, Session: session, Timeout: timeout, Wait: wait}
+	req := gmRequest{URL: url, Session: session, Timeout: timeout, Wait: wait, Selector: selector}
 	data, _ := json.Marshal(req)
 	_ = conn.SetDeadline(time.Now().Add(time.Duration(timeout+60) * time.Second))
 	if _, err := conn.Write(append(data, '\n')); err != nil {
@@ -170,15 +171,15 @@ func waitDaemon(backend string, d time.Duration) bool {
 }
 
 // FetchViaDaemon 走常驻 daemon；SF_NO_DAEMON=1 时禁用。
-func FetchViaDaemon(backend, url, session string, timeout int, wait float64) (string, bool) {
+func FetchViaDaemon(backend, url, session, selector string, timeout int, wait float64) (string, bool) {
 	if os.Getenv("SF_NO_DAEMON") == "1" {
 		return "", false
 	}
-	if html, ok := tryDaemon(backend, url, session, timeout, wait); ok {
+	if html, ok := tryDaemon(backend, url, session, selector, timeout, wait); ok {
 		return html, true
 	}
 	if !ensureDaemon(backend) {
 		return "", false
 	}
-	return tryDaemon(backend, url, session, timeout, wait)
+	return tryDaemon(backend, url, session, selector, timeout, wait)
 }

@@ -67,7 +67,7 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 	}
 
 	// 优先走常驻 daemon：浏览器只启动一次
-	if html, ok := FetchViaDaemon("gomoufox", rawURL, sessionFile, opts.Timeout, 1.5); ok {
+	if html, ok := FetchViaDaemon("gomoufox", rawURL, sessionFile, opts.WaitSelector, opts.Timeout, 1.5); ok {
 		return html, "text/html", nil
 	}
 
@@ -105,6 +105,7 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 		gomoufox.WithTimezoneID("Asia/Shanghai"),
 	}
 	if st := loadStorageState(sessionFile); st != nil {
+		normalizeStorageState(st)
 		copts = append(copts, gomoufox.WithStorageState(st))
 	}
 	page, err := b.NewPage(bootCtx, copts...)
@@ -144,6 +145,22 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 		}
 	}
 	return html, "text/html", nil
+}
+
+// normalizeStorageState 把 sameSite 规范成合法值（Playwright 导出的空串会被 gomoufox 拒绝）。
+func normalizeStorageState(st *gomoufox.StorageState) {
+	for i := range st.Cookies {
+		switch strings.ToLower(st.Cookies[i].SameSite) {
+		case "strict":
+			st.Cookies[i].SameSite = "Strict"
+		case "lax":
+			st.Cookies[i].SameSite = "Lax"
+		case "none", "no_restriction":
+			st.Cookies[i].SameSite = "None"
+		default:
+			st.Cookies[i].SameSite = "Lax"
+		}
+	}
 }
 
 func waitSelectorGomoufox(ctx context.Context, page *gomoufox.Page, sel string, d time.Duration) {

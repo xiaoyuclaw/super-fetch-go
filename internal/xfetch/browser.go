@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -47,6 +48,8 @@ type Browser struct {
 	browserStop context.CancelFunc
 	opts        BrowserOptions
 	useGomoufox bool
+	startOnce   sync.Once
+	startErr    error
 }
 
 // FindChrome 依次找 CHROME_PATH、Playwright 缓存、系统 Chrome/Chromium。
@@ -160,8 +163,10 @@ func newChromedpBrowser(opts BrowserOptions) (*Browser, error) {
 		pos = "120,80"
 	}
 
+	profile, _ := os.MkdirTemp("", "sf-cd-")
 	flags := []chromedp.ExecAllocatorOption{
 		chromedp.ExecPath(exe),
+		chromedp.UserDataDir(profile),
 		chromedp.Flag("headless", opts.Headless),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
@@ -171,7 +176,6 @@ func newChromedpBrowser(opts BrowserOptions) (*Browser, error) {
 		chromedp.Flag("window-position", pos),
 		chromedp.Flag("window-size", fmt.Sprintf("%d,%d", opts.Width, opts.Height)),
 		chromedp.Flag("lang", "zh-CN"),
-		chromedp.UserDataDir(""),
 	}
 	if opts.Proxy != "" {
 		flags = append(flags, chromedp.ProxyServer(opts.Proxy))
@@ -179,12 +183,6 @@ func newChromedpBrowser(opts BrowserOptions) (*Browser, error) {
 
 	allocCtx, allocStop := chromedp.NewExecAllocator(context.Background(), flags...)
 	browserCtx, browserStop := chromedp.NewContext(allocCtx)
-	// 触发启动：必须用 browserCtx 本身，浏览器进程绑定在它上面；
-	// 用带超时的子 ctx 会在 cancel 时把浏览器一起带走。
-	if err := chromedp.Run(browserCtx); err != nil {
-		allocStop()
-		return nil, fmt.Errorf("浏览器启动失败: %w", err)
-	}
 	return &Browser{
 		allocCtx: allocCtx, allocStop: allocStop,
 		browserCtx: browserCtx, browserStop: browserStop,
@@ -193,6 +191,18 @@ func newChromedpBrowser(opts BrowserOptions) (*Browser, error) {
 }
 
 // SetWaitSelector 设置导航后等待出现的 CSS 选择器。
+// ensureStarted 懒启动：真正要用浏览器时才拉起进程（daemon 命中就不必启动）。
+func (b *Browser) ensureStarted() error {
+	b.startOnce.Do(func() {
+		if b.browserCtx == nil {
+			b.startErr = errors.New("no browser context")
+			return
+		}
+		b.startErr = chromedp.Run(b.browserCtx)
+	})
+	return b.startErr
+}
+
 func (b *Browser) SetWaitSelector(sel string) { b.opts.WaitSelector = sel }
 
 // SetStable 设置是否等正文长度稳定后再取内容。
@@ -216,6 +226,9 @@ func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) { return
 
 // newTab 开一个新标签页并注入 stealth。
 func (b *Browser) newTab() (context.Context, context.CancelFunc, error) {
+	if err := b.ensureStarted(); err != nil {
+		return nil, nil, fmt.Errorf("浏览器启动失败: %w", err)
+	}
 	tabCtx, cancel := chromedp.NewContext(b.browserCtx)
 	if err := chromedp.Run(tabCtx); err != nil {
 		cancel()
@@ -275,9 +288,14 @@ func buildLocalStorageScript(o Origin) string {
 
 // FetchWithBrowser 用浏览器抓页面，返回 HTML 与 contentType。
 func (b *Browser) FetchWithBrowser(rawURL, sessionFile string) (string, string, error) {
+	if !b.useGomoufox && b.kind == "chromedp" {
+		if err := b.ensureStarted(); err != nil {
+			return "", "", err
+		}
+	}
 	if !b.useGomoufox {
 		// chromedp / nodriver 也走常驻 daemon（按需拉起，单实例）
-		if html, ok := FetchViaDaemon(b.kind, rawURL, sessionFile, b.opts.Timeout, 1.0); ok {
+		if html, ok := FetchViaDaemon(b.kind, rawURL, sessionFile, b.opts.WaitSelector, b.opts.Timeout, 1.0); ok {
 			return html, "text/html", nil
 		}
 	}
