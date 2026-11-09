@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -35,6 +37,27 @@ type request struct {
 type response struct {
 	HTML  string `json:"html"`
 	Error string `json:"error"`
+}
+
+// reapStaleBrowsers 清掉上次异常退出留下的浏览器进程（按 profile 前缀认领）。
+func reapStaleBrowsers() {
+	entries, err := os.ReadDir("/tmp")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "sf-nd-") && !strings.HasPrefix(name, "sf-cd-") {
+			continue
+		}
+		out, _ := exec.Command("pgrep", "-f", "--", "/tmp/"+name).Output()
+		for _, f := range strings.Fields(string(out)) {
+			if pid, err := strconv.Atoi(f); err == nil && pid != os.Getpid() {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+		_ = os.RemoveAll("/tmp/" + name)
+	}
 }
 
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "[sfd] "+format+"\n", a...) }
@@ -110,19 +133,35 @@ func main() {
 		logf("后端启动失败")
 		return
 	}
+	reapStaleBrowsers()
 	logf("%s 浏览器已常驻", *backend)
+
+	shutdown := func(reason string) {
+		logf("%s，关闭", reason)
+		cleanup()
+		os.Remove(*sock)
+		os.Remove(*sock + ".pid")
+		os.Remove(*sock + ".lock")
+		os.Exit(0)
+	}
+
+	// SIGTERM/SIGINT：先关浏览器再退出（客户端切换后端时会发 SIGTERM）
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigc
+		shutdown("收到退出信号")
+	}()
 
 	lastUsed := time.Now()
 	go func() {
 		for {
 			time.Sleep(10 * time.Second)
 			if !dshAlive(*dshPID) {
-				logf("DSH 已退出，关闭")
-				os.Exit(0)
+				shutdown("DSH 已退出")
 			}
 			if int(time.Since(lastUsed).Seconds()) > *idle {
-				logf("空闲超时，关闭")
-				os.Exit(0)
+				shutdown("空闲超时")
 			}
 		}
 	}()

@@ -106,9 +106,10 @@ func killOtherDaemons(keep string) {
 		if err != nil || pid <= 0 {
 			continue
 		}
-		if p, err := os.FindProcess(pid); err == nil {
-			_ = p.Signal(syscall.Signal(9))
-		}
+		// daemon 用 Setsid 启动，pgid == pid：先 SIGTERM 让它自己关浏览器，再兜底 SIGKILL
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
+		time.Sleep(500 * time.Millisecond)
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}
 }
 
@@ -130,9 +131,20 @@ func ensureDaemon(backend string) bool {
 		}
 	}
 	killOtherDaemons(backend)
+	// 同后端旧 daemon 也先收掉，避免残留浏览器
+	if data, err := os.ReadFile(gmSock(backend) + ".pid"); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+			_ = syscall.Kill(-pid, syscall.SIGTERM)
+			time.Sleep(400 * time.Millisecond)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}
 	cmd := exec.Command(sfd, "--backend", backend, "--sock", gmSock(backend), "--dsh-pid", strconv.Itoa(dshHostPID()))
 	cmd.SysProcAttr = sysProcAttrDetach()
-	cmd.Stdout, cmd.Stderr = nil, nil
+	logPath := filepath.Join(os.TempDir(), "sfd-"+backend+".log")
+	if lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		cmd.Stdout, cmd.Stderr = lf, lf
+	}
 	_ = cmd.Start()
 	return waitDaemon(backend, 60*time.Second)
 }
