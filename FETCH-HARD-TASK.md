@@ -121,23 +121,19 @@
 - 考的策略：S-http（首选）/ S-browser（对照）/ S-auto
 
 
-## 策略对比（每个任务跑这几条线）
+## 策略（只有四种）
 
-| 策略线 | 含义 | 关注点 |
-|---|---|---|
-| **S-auto** | 默认（cffi 优先，失败升浏览器） | 综合最优解 |
-| **S-browser** | 全程 `--via browser`（nodriver） | 稳但慢多少 |
-| **S-http** | 纯 cffi（能到哪一步） | 纯 HTTP 的天花板 |
-| **S-mixed** | discover/embedded 找到接口 + http 直取 | 是否绕开渲染 |
-| **S-discovery3** | **分析路由**（决策层，不是固定流水线）：先分析数据在哪 → 决定用「接口 / http / browser」→ 执行；可多轮 | 分析判断是否选对通道 |
-| **S-session** | 带 `-s` 热启动 | 登录态的代价 |
+| # | 策略 | 含义 | 命令 |
+|---|---|---|---|
+| S1 | **auto** | 先 cffi，失败升浏览器 | `sf "<url>"` |
+| S2 | **http** | 纯 cffi | `sf "<url>" --via http` |
+| S3 | **browser** | 全程有头浏览器 | `sf "<url>" --via browser` |
+| S4 | **discover** | 先分析数据在哪，再决定走接口 / http / browser（可多轮） | `sf "<url>" --discover` + 后续 |
 
-> 每个任务不必五条都跑满：H1 跑 auto/browser/http；H2 跑 auto/http；
-> H3 跑 session×3 后端 + fresh；H4 跑 auto/http/brief；H5 跑 mixed/browser。
+**不是策略**：`session`（`-s` 登录态）是能力，`brief`（`-L brief`）是输出档位——
+它们作为前提或参数叠加在四种策略上，不单独计分。
 
----
-
-## S-discovery3：分析路由（重点）
+## S4 discover：分析路由（重点）
 
 这是**决策层**：产出一个路由决定，而不是"一定要用接口"。
 
