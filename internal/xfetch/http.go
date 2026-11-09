@@ -14,6 +14,7 @@ import (
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
 	"golang.org/x/net/html/charset"
+	"unicode/utf8"
 
 	"superfetch/internal/xcore"
 )
@@ -52,6 +53,12 @@ type Response struct {
 // Text 按响应头/页面 meta 的字符集解码正文。
 func (r *Response) Text() string {
 	if !r.IsBinary {
+		// 响应头/meta 都没写 charset 时，charset.NewReader 会退到 windows-1252，
+		// UTF-8 页面就会变成 "æœ" 这种乱码；先按 UTF-8 试一次。
+		declared := strings.Contains(strings.ToLower(r.ContentType), "charset=")
+		if !declared && utf8.Valid(r.Body) {
+			return string(r.Body)
+		}
 		reader, err := charset.NewReader(bytes.NewReader(r.Body), r.ContentType)
 		if err == nil {
 			if b, err := io.ReadAll(reader); err == nil {
