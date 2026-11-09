@@ -129,8 +129,10 @@ func BackendKind() string {
 		return "nodriver"
 	case "chromium", "chromedp", "patchright", "playwright":
 		return "chromedp"
+	case "gomoufox", "camoufox":
+		return "gomoufox"
 	}
-	return "gomoufox"
+	return "nodriver"
 }
 
 func newChromedpBrowser(opts BrowserOptions) (*Browser, error) {
@@ -272,8 +274,12 @@ func buildLocalStorageScript(o Origin) string {
 
 // FetchWithBrowser 用浏览器抓页面，返回 HTML 与 contentType。
 func (b *Browser) FetchWithBrowser(rawURL, sessionFile string) (string, string, error) {
-	// 说明：chromedp 通道暂不接 daemon（sfd --backend chromedp 仍可单独跑，
-	// 但客户端接入会偶发卡在启动探测上，先用进程内启动，约 6s）
+	if !b.useGomoufox {
+		// chromedp / nodriver 也走常驻 daemon（按需拉起，单实例）
+		if html, ok := FetchViaDaemon(b.kind, rawURL, sessionFile, b.opts.Timeout, 1.0); ok {
+			return html, "text/html", nil
+		}
+	}
 	if b.kind == "nodriver" {
 		html, ctype, err := FetchWithNodriver(rawURL, sessionFile, b.opts)
 		if err == nil {

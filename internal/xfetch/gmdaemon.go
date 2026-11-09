@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -91,6 +92,26 @@ func tryDaemon(backend, url, session string, timeout int, wait float64) (string,
 	return resp.HTML, true
 }
 
+// killOtherDaemons 保证同时只有一个浏览器 daemon（这台机器内存只有 6G）。
+func killOtherDaemons(keep string) {
+	for _, b := range []string{"gomoufox", "nodriver", "chromedp"} {
+		if b == keep {
+			continue
+		}
+		data, err := os.ReadFile(gmSock(b) + ".pid")
+		if err != nil {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Signal(syscall.Signal(9))
+		}
+	}
+}
+
 // ensureDaemon 起一个常驻 daemon（已有则跳过），最多等 60 秒就绪。
 func ensureDaemon(backend string) bool {
 	if _, ok := tryDaemonPing(backend); ok {
@@ -108,6 +129,7 @@ func ensureDaemon(backend string) bool {
 			return false
 		}
 	}
+	killOtherDaemons(backend)
 	cmd := exec.Command(sfd, "--backend", backend, "--sock", gmSock(backend), "--dsh-pid", strconv.Itoa(dshHostPID()))
 	cmd.SysProcAttr = sysProcAttrDetach()
 	cmd.Stdout, cmd.Stderr = nil, nil

@@ -3,24 +3,27 @@
 `sf` / `sv` 的 Go 实现，功能对齐 Python 版（`../super-fetch`、`../super-search`），
 与 Python 版**共用同一个数据目录**（`.data/links.db`、登录态、搜索 Cookie 都对得上）。
 
-## 浏览器后端（三种，SF_BROWSER 切换）
+## 浏览器后端（三种，SF_BROWSER 切换，默认 nodriver）
 
-| 后端 | 内核 | 默认 | 实测（example.com，-w 1） | 说明 |
+| 后端 | 内核 | 冷启动 | 热启动 | 说明 |
 |---|---|---|---|---|
-| **gomoufox** | Camoufox/Firefox | ✅ | ~3s（常驻 daemon） | 反检测最强，webdriver 不泄漏 |
-| **chromedp** | Playwright Chromium | | ~2.8s | 最快，进程内启动 |
-| **nodriver** | 系统真实 Chrome | | ~3.5s | CDP 远程调试端口 + 无自动化参数，`navigator.webdriver=false` |
+| **nodriver**（默认） | 系统真实 Chrome | 3.8s | **1.4s** | CDP 远程调试端口 + 无自动化参数，`navigator.webdriver=false` |
+| **chromedp** | Playwright Chromium | 8.0s | 3.7s | 兼容性最好 |
+| **gomoufox** | Camoufox / Firefox | 35s | 2.6s | 反检测最强，冷启动最慢 |
 
 ```bash
-SF_BROWSER=gomoufox sf "<url>" --via browser   # 默认
+SF_BROWSER=nodriver sf "<url>" --via browser   # 默认
 SF_BROWSER=chromedp sf "<url>" --via browser
-SF_BROWSER=nodriver sf "<url>" --via browser   # 需要系统 Chrome
-SF_HEADLESS=true|virtual|false                 # gomoufox 默认 virtual
+SF_BROWSER=gomoufox sf "<url>" --via browser
+SF_HEADLESS=virtual|true|false                 # gomoufox 默认 virtual
 ```
 
-**热启动**：只有 gomoufox 有常驻 daemon（`bin/sfd`），首次抓取自动拉起，之后复用；
-单实例 flock、随 DSH 退出、空闲 30 分钟退出。chromedp / nodriver 是进程内启动
-（本来就只要 2–3 秒）。
+**三种后端都支持按需预热（daemon）**：首次抓取自动拉起 `bin/sfd --backend X`，
+之后复用；单实例 flock、随 DSH 退出、空闲 15 分钟退出。
+
+> 内存约束：这台机器只有 6G，**同一时间只保留一个 daemon**——
+> 切换后端时客户端会先杀掉其它后端的 daemon（按 `<sock>.pid`）。
+> 禁用 daemon：`SF_NO_DAEMON=1`。
 
 ## 构建
 

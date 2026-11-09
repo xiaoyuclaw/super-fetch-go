@@ -1,4 +1,6 @@
-// sfd 是 gomoufox 的常驻浏览器 daemon：启动一次浏览器，sf 通过 unix socket 复用它。
+// sfd 是常驻浏览器 daemon：一个后端一个进程，sf 通过 unix socket 复用。
+//
+//	sfd --backend gomoufox|nodriver|chromedp [--sock PATH] [--dsh-pid PID] [--idle SEC]
 package main
 
 import (
@@ -8,7 +10,9 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -31,9 +35,7 @@ type response struct {
 	Error string `json:"error"`
 }
 
-func logf(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "[sfd] "+format+"\n", a...)
-}
+func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "[sfd] "+format+"\n", a...) }
 
 func dshAlive(pid int) bool {
 	if pid <= 0 {
@@ -46,14 +48,23 @@ func dshAlive(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
+func headlessMode() camoufoxcfg.HeadlessMode {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SF_HEADLESS"))) {
+	case "false":
+		return camoufoxcfg.HeadlessFalse
+	case "true":
+		return camoufoxcfg.HeadlessTrue
+	}
+	return camoufoxcfg.HeadlessVirtual
+}
+
 func main() {
-	sock := flag.String("sock", defaultSock(), "unix socket path")
+	sock := flag.String("sock", defaultSock("gomoufox"), "unix socket path")
+	backend := flag.String("backend", "gomoufox", "gomoufox|nodriver|chromedp")
 	dshPID := flag.Int("dsh-pid", 0, "dsh host pid; daemon exits when it dies")
-	idle := flag.Int("idle", 1800, "idle timeout seconds")
-	backend := flag.String("backend", "gomoufox", "gomoufox|chromedp")
+	idle := flag.Int("idle", 900, "idle timeout seconds")
 	flag.Parse()
 
-	// 单实例锁
 	lockPath := *sock + ".lock"
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -73,31 +84,31 @@ func main() {
 		return
 	}
 	_ = os.Chmod(*sock, 0o600)
-	logf("监听 %s（dsh_pid=%d, idle=%ds）", *sock, *dshPID, *idle)
+	_ = os.WriteFile(*sock+".pid", []byte(fmt.Sprintf("%d", os.Getpid())), 0o600)
+	defer os.Remove(*sock)
+	defer os.Remove(*sock + ".pid")
+	defer os.Remove(*sock + ".lock")
+
+	logf("监听 %s（backend=%s, dsh_pid=%d, idle=%ds）", *sock, *backend, *dshPID, *idle)
 
 	ctx := context.Background()
+	var handler func(request) (string, error)
+	var cleanup func()
 
-	if *backend == "chromedp" {
-		serveChromedp(ctx, *sock, *dshPID, *idle, ln)
-		return
-	}
-
-	var newOpts []gomoufox.Option
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SF_HEADLESS"))) {
-	case "false":
-		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessFalse))
-	case "true":
-		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessTrue))
+	switch *backend {
+	case "gomoufox":
+		handler, cleanup = newGomoufox(ctx)
+	case "nodriver":
+		handler, cleanup = newNodriver(ctx)
 	default:
-		newOpts = append(newOpts, gomoufox.WithHeadless(camoufoxcfg.HeadlessVirtual))
+		handler, cleanup = newChromedp(ctx)
 	}
-	browser, err := gomoufox.New(ctx, newOpts...)
-	if err != nil {
-		logf("浏览器启动失败: %v", err)
+	defer cleanup()
+	if handler == nil {
+		logf("后端启动失败")
 		return
 	}
-	defer browser.Close()
-	logf("浏览器已常驻")
+	logf("%s 浏览器已常驻", *backend)
 
 	lastUsed := time.Now()
 	go func() {
@@ -127,11 +138,11 @@ func main() {
 				return
 			}
 			var req request
-			if err := json.Unmarshal(line, &req); err != nil {
+			if json.Unmarshal(line, &req) != nil {
 				writeJSON(c, response{Error: "bad request"})
 				return
 			}
-			html, err := fetchPage(ctx, browser, req)
+			html, err := handler(req)
 			if err != nil {
 				writeJSON(c, response{Error: err.Error()})
 			} else {
@@ -142,69 +153,52 @@ func main() {
 	}
 }
 
-func fetchPage(ctx context.Context, b *gomoufox.Browser, req request) (string, error) {
-	timeout := req.Timeout
-	if timeout <= 0 {
-		timeout = 30
+// ---------- gomoufox ----------
+
+func newGomoufox(ctx context.Context) (func(request) (string, error), func()) {
+	b, err := gomoufox.New(ctx, gomoufox.WithHeadless(headlessMode()))
+	if err != nil {
+		logf("gomoufox 启动失败: %v", err)
+		return nil, func() {}
 	}
-	opts := []gomoufox.ContextOption{
-		gomoufox.WithViewport(1280, 900),
-		gomoufox.WithContextLocale("zh-CN"),
-		gomoufox.WithTimezoneID("Asia/Shanghai"),
-	}
-	if req.Session != "" {
-		if data, err := os.ReadFile(req.Session); err == nil {
-			var st gomoufox.StorageState
-			if json.Unmarshal(data, &st) == nil {
-				opts = append(opts, gomoufox.WithStorageState(&st))
+	fetch := func(req request) (string, error) {
+		timeout := req.Timeout
+		if timeout <= 0 {
+			timeout = 30
+		}
+		opts := []gomoufox.ContextOption{
+			gomoufox.WithViewport(1280, 900),
+			gomoufox.WithContextLocale("zh-CN"),
+			gomoufox.WithTimezoneID("Asia/Shanghai"),
+		}
+		if req.Session != "" {
+			if data, err := os.ReadFile(req.Session); err == nil {
+				var st gomoufox.StorageState
+				if json.Unmarshal(data, &st) == nil {
+					opts = append(opts, gomoufox.WithStorageState(&st))
+				}
 			}
 		}
-	}
-	page, err := b.NewPage(ctx, opts...)
-	if err != nil {
-		return "", err
-	}
-	defer page.Close()
-
-	if _, err := page.Goto(ctx, req.URL,
-		gomoufox.WaitUntil("domcontentloaded"),
-		gomoufox.WithTimeout(time.Duration(timeout)*time.Second)); err != nil {
-		return "", err
-	}
-	if req.Wait > 0 {
-		time.Sleep(time.Duration(req.Wait * float64(time.Second)))
-	}
-	html, err := page.Content(ctx)
-	if err != nil {
-		return "", err
-	}
-	if req.Session != "" {
-		if cookies, err := page.Cookies(ctx); err == nil && len(cookies) > 0 {
-			st := gomoufox.StorageState{Cookies: cookies}
-			if data, err := json.Marshal(st); err == nil {
-				_ = os.WriteFile(req.Session, data, 0o600)
-			}
+		page, err := b.NewPage(ctx, opts...)
+		if err != nil {
+			return "", err
 		}
+		defer page.Close()
+		if _, err := page.Goto(ctx, req.URL, gomoufox.WaitUntil("domcontentloaded"),
+			gomoufox.WithTimeout(time.Duration(timeout)*time.Second)); err != nil {
+			return "", err
+		}
+		if req.Wait > 0 {
+			time.Sleep(time.Duration(req.Wait * float64(time.Second)))
+		}
+		return page.Content(ctx)
 	}
-	return html, nil
+	return fetch, func() { b.Close() }
 }
 
-func writeJSON(c net.Conn, v response) {
-	data, _ := json.Marshal(v)
-	_, _ = c.Write(append(data, '\n'))
-}
+// ---------- chromedp ----------
 
-func defaultSock() string {
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir == "" {
-		runtimeDir = "/tmp"
-	}
-	return filepath.Join(runtimeDir, fmt.Sprintf("sf-gomoufox-%d.sock", os.Getuid()))
-}
-
-// serveChromedp 用 chromedp 跑常驻浏览器。
-func serveChromedp(ctx context.Context, sock string, dshPID, idle int, ln net.Listener) {
-	defer ln.Close()
+func newChromedp(ctx context.Context) (func(request) (string, error), func()) {
 	exe := os.Getenv("CHROME_PATH")
 	if exe == "" {
 		home, _ := os.UserHomeDir()
@@ -231,65 +225,88 @@ func serveChromedp(ctx context.Context, sock string, dshPID, idle int, ln net.Li
 		chromedp.UserDataDir(""),
 	}
 	allocCtx, allocStop := chromedp.NewExecAllocator(context.Background(), flags...)
-	defer allocStop()
 	browserCtx, browserStop := chromedp.NewContext(allocCtx)
-	defer browserStop()
 	if err := chromedp.Run(browserCtx); err != nil {
 		logf("chromedp 启动失败: %v", err)
-		return
+		allocStop()
+		return nil, func() {}
 	}
-	logf("chromedp 浏览器已常驻")
-
-	lastUsed := time.Now()
-	go func() {
-		for {
-			time.Sleep(10 * time.Second)
-			if !dshAlive(dshPID) {
-				logf("DSH 已退出，关闭")
-				os.Exit(0)
-			}
-			if int(time.Since(lastUsed).Seconds()) > idle {
-				logf("空闲超时，关闭")
-				os.Exit(0)
-			}
-		}
-	}()
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		lastUsed = time.Now()
-		go func(c net.Conn) {
-			defer c.Close()
-			line, err := bufio.NewReader(c).ReadBytes('\n')
-			if err != nil {
-				return
-			}
-			var req request
-			if json.Unmarshal(line, &req) != nil {
-				writeJSON(c, response{Error: "bad request"})
-				return
-			}
-			html, err := fetchChromedp(ctx, browserCtx, req)
-			if err != nil {
-				writeJSON(c, response{Error: err.Error()})
-			} else {
-				writeJSON(c, response{HTML: html})
-			}
-			lastUsed = time.Now()
-		}(conn)
-	}
+	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
+	return fetch, func() { browserStop(); allocStop() }
 }
 
-func fetchChromedp(ctx context.Context, browserCtx context.Context, req request) (string, error) {
+// ---------- nodriver（系统 Chrome + 远程调试端口） ----------
+
+func newNodriver(ctx context.Context) (func(request) (string, error), func()) {
+	exe := findSystemChrome()
+	if exe == "" {
+		logf("找不到系统 Chrome")
+		return nil, func() {}
+	}
+	profile, err := os.MkdirTemp("", "sf-nd-")
+	if err != nil {
+		return nil, func() {}
+	}
+	args := []string{
+		"--remote-debugging-port=0",
+		"--user-data-dir=" + profile,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-blink-features=AutomationControlled",
+		"--disable-dev-shm-usage",
+		"--no-sandbox",
+		"--window-position=-2400,-2400",
+		"--window-size=1280,900",
+		"--lang=zh-CN",
+	}
+	if os.Getenv("SF_HEADLESS") == "true" {
+		args = append(args, "--headless=new")
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		logf("Chrome 启动失败: %v", err)
+		return nil, func() {}
+	}
+	kill := func() {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		_ = cmd.Wait()
+		os.RemoveAll(profile)
+	}
+
+	port, err := waitPort(profile, 20*time.Second)
+	if err != nil {
+		logf("等调试端口失败: %v", err)
+		kill()
+		return nil, func() {}
+	}
+	ws, err := wsURL(port)
+	if err != nil {
+		logf("取 ws 地址失败: %v", err)
+		kill()
+		return nil, func() {}
+	}
+	allocCtx, allocStop := chromedp.NewRemoteAllocator(context.Background(), ws)
+	browserCtx, browserStop := chromedp.NewContext(allocCtx)
+	if err := chromedp.Run(browserCtx); err != nil {
+		logf("连接 Chrome 失败: %v", err)
+		allocStop()
+		kill()
+		return nil, func() {}
+	}
+	fetch := func(req request) (string, error) { return fetchTab(browserCtx, req) }
+	return fetch, func() { browserStop(); allocStop(); kill() }
+}
+
+func fetchTab(browserCtx context.Context, req request) (string, error) {
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = 30
 	}
-	tabCtx, cancel := chromedp.NewContext(browserCtx)
-	defer cancel()
+	tabCtx, cancelTab := chromedp.NewContext(browserCtx)
+	defer cancelTab()
 	tabCtx, cancelTO := context.WithTimeout(tabCtx, time.Duration(timeout+20)*time.Second)
 	defer cancelTO()
 	var html string
@@ -299,4 +316,65 @@ func fetchChromedp(ctx context.Context, browserCtx context.Context, req request)
 		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
 	)
 	return html, err
+}
+
+func findSystemChrome() string {
+	for _, c := range []string{
+		os.Getenv("CHROME_PATH"),
+		"/usr/bin/google-chrome",
+		"/opt/google/chrome/chrome",
+		"/usr/bin/google-chrome-stable",
+	} {
+		if c != "" {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+	}
+	return ""
+}
+
+func waitPort(profile string, d time.Duration) (string, error) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(filepath.Join(profile, "DevToolsActivePort")); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if len(lines) > 0 && lines[0] != "" {
+				return lines[0], nil
+			}
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+	return "", fmt.Errorf("等待调试端口超时")
+}
+
+func wsURL(port string) (string, error) {
+	resp, err := http.Get("http://127.0.0.1:" + port + "/json/version")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var v struct {
+		WS string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return "", err
+	}
+	if v.WS == "" {
+		return "", fmt.Errorf("没有 webSocketDebuggerUrl")
+	}
+	return v.WS, nil
+}
+
+func writeJSON(c net.Conn, v response) {
+	data, _ := json.Marshal(v)
+	_, _ = c.Write(append(data, '\n'))
+}
+
+func defaultSock(backend string) string {
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("sf-%s-%d.sock", backend, os.Getuid()))
 }
