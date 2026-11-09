@@ -238,6 +238,7 @@ func parseArgs(args []string) (*options, error) {
 		o.Engine = "playwright"
 	case "auto", "cffi", "playwright":
 	default:
+		stderr("[*] ⚠️ 未知通道 %q，回退 auto（可选：auto|cffi|playwright|http|browser）\n", o.Engine)
 		o.Engine = "auto"
 	}
 	return o, nil
