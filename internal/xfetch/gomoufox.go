@@ -67,7 +67,7 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 	}
 
 	// 优先走常驻 daemon：浏览器只启动一次
-	if html, ok := FetchViaDaemon(rawURL, sessionFile, opts.Timeout, 1.5); ok {
+	if html, ok := FetchViaDaemon("gomoufox", rawURL, sessionFile, opts.Timeout, 1.5); ok {
 		return html, "text/html", nil
 	}
 

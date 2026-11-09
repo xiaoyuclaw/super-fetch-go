@@ -24,7 +24,7 @@ type gmResponse struct {
 	Error string `json:"error"`
 }
 
-func gmSock() string {
+func gmSock(backend string) string {
 	if s := os.Getenv("SF_DAEMON_SOCK"); s != "" {
 		return s
 	}
@@ -32,7 +32,7 @@ func gmSock() string {
 	if dir == "" {
 		dir = "/tmp"
 	}
-	return filepath.Join(dir, "sf-gomoufox-"+strconv.Itoa(os.Getuid())+".sock")
+	return filepath.Join(dir, "sf-"+backend+"-"+strconv.Itoa(os.Getuid())+".sock")
 }
 
 // dshHostPID 向上找 DSH 宿主进程，daemon 随它退出。
@@ -68,8 +68,8 @@ func dshHostPID() int {
 }
 
 // tryDaemon 发一条请求；daemon 不可用返回 false。
-func tryDaemon(url, session string, timeout int, wait float64) (string, bool) {
-	conn, err := net.DialTimeout("unix", gmSock(), 300*time.Millisecond)
+func tryDaemon(backend, url, session string, timeout int, wait float64) (string, bool) {
+	conn, err := net.DialTimeout("unix", gmSock(backend), 300*time.Millisecond)
 	if err != nil {
 		return "", false
 	}
@@ -92,8 +92,8 @@ func tryDaemon(url, session string, timeout int, wait float64) (string, bool) {
 }
 
 // ensureDaemon 起一个常驻 daemon（已有则跳过），最多等 60 秒就绪。
-func ensureDaemon() bool {
-	if _, ok := tryDaemonPing(); ok {
+func ensureDaemon(backend string) bool {
+	if _, ok := tryDaemonPing(backend); ok {
 		return true
 	}
 	exe, err := os.Executable()
@@ -108,15 +108,15 @@ func ensureDaemon() bool {
 			return false
 		}
 	}
-	cmd := exec.Command(sfd, "--sock", gmSock(), "--dsh-pid", strconv.Itoa(dshHostPID()))
+	cmd := exec.Command(sfd, "--backend", backend, "--sock", gmSock(backend), "--dsh-pid", strconv.Itoa(dshHostPID()))
 	cmd.SysProcAttr = sysProcAttrDetach()
 	cmd.Stdout, cmd.Stderr = nil, nil
 	_ = cmd.Start()
-	return waitDaemon(60 * time.Second)
+	return waitDaemon(backend, 60*time.Second)
 }
 
-func tryDaemonPing() (string, bool) {
-	conn, err := net.DialTimeout("unix", gmSock(), 200*time.Millisecond)
+func tryDaemonPing(backend string) (string, bool) {
+	conn, err := net.DialTimeout("unix", gmSock(backend), 200*time.Millisecond)
 	if err != nil {
 		return "", false
 	}
@@ -124,10 +124,10 @@ func tryDaemonPing() (string, bool) {
 	return "ok", true
 }
 
-func waitDaemon(d time.Duration) bool {
+func waitDaemon(backend string, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if _, ok := tryDaemonPing(); ok {
+		if _, ok := tryDaemonPing(backend); ok {
 			return true
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -136,15 +136,15 @@ func waitDaemon(d time.Duration) bool {
 }
 
 // FetchViaDaemon 走常驻 daemon；SF_NO_DAEMON=1 时禁用。
-func FetchViaDaemon(url, session string, timeout int, wait float64) (string, bool) {
+func FetchViaDaemon(backend, url, session string, timeout int, wait float64) (string, bool) {
 	if os.Getenv("SF_NO_DAEMON") == "1" {
 		return "", false
 	}
-	if html, ok := tryDaemon(url, session, timeout, wait); ok {
+	if html, ok := tryDaemon(backend, url, session, timeout, wait); ok {
 		return html, true
 	}
-	if !ensureDaemon() {
+	if !ensureDaemon(backend) {
 		return "", false
 	}
-	return tryDaemon(url, session, timeout, wait)
+	return tryDaemon(backend, url, session, timeout, wait)
 }

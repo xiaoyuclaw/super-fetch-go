@@ -3,14 +3,24 @@
 `sf` / `sv` 的 Go 实现，功能对齐 Python 版（`../super-fetch`、`../super-search`），
 与 Python 版**共用同一个数据目录**（`.data/links.db`、登录态、搜索 Cookie 都对得上）。
 
-## 浏览器后端
+## 浏览器后端（三种，SF_BROWSER 切换）
 
-默认走 **gomoufox**（Camoufox / Firefox 内核）：`github.com/ehmo/gomoufox`。
-运行时由 `gomoufox install` 装到 `~/.cache/gomoufox/venv/runtime/`，`gomoufox doctor` 自检。
+| 后端 | 内核 | 默认 | 实测（example.com，-w 1） | 说明 |
+|---|---|---|---|---|
+| **gomoufox** | Camoufox/Firefox | ✅ | ~3s（常驻 daemon） | 反检测最强，webdriver 不泄漏 |
+| **chromedp** | Playwright Chromium | | ~2.8s | 最快，进程内启动 |
+| **nodriver** | 系统真实 Chrome | | ~3.5s | CDP 远程调试端口 + 无自动化参数，`navigator.webdriver=false` |
 
-- `SF_BROWSER=chromium` → 回退 chromedp（Chromium）
-- `-i/--login` 交互模式仍用 chromedp
-- 首次启动约 6–11s，热启动约 3s
+```bash
+SF_BROWSER=gomoufox sf "<url>" --via browser   # 默认
+SF_BROWSER=chromedp sf "<url>" --via browser
+SF_BROWSER=nodriver sf "<url>" --via browser   # 需要系统 Chrome
+SF_HEADLESS=true|virtual|false                 # gomoufox 默认 virtual
+```
+
+**热启动**：只有 gomoufox 有常驻 daemon（`bin/sfd`），首次抓取自动拉起，之后复用；
+单实例 flock、随 DSH 退出、空闲 30 分钟退出。chromedp / nodriver 是进程内启动
+（本来就只要 2–3 秒）。
 
 ## 构建
 

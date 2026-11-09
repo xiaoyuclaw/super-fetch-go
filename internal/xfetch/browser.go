@@ -39,6 +39,7 @@ type BrowserOptions struct {
 
 // Browser 一个可复用的浏览器实例。
 type Browser struct {
+	kind        string // gomoufox | nodriver | chromedp
 	allocCtx    context.Context
 	allocStop   context.CancelFunc
 	browserCtx  context.Context
@@ -100,9 +101,11 @@ func LaunchBrowser(opts BrowserOptions) (*Browser, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = 30
 	}
-	// Camoufox 通道：不需要 chromedp 分配器，按需启动
-	if GomoufoxEnabled() && !opts.Interactive {
-		return &Browser{opts: opts, useGomoufox: true}, nil
+	// gomoufox / nodriver：不需要常驻 chromedp 分配器，按需启动
+	if !opts.Interactive {
+		if kind := BackendKind(); kind != "chromedp" {
+			return &Browser{opts: opts, kind: kind, useGomoufox: kind == "gomoufox"}, nil
+		}
 	}
 	return newChromedpBrowser(opts)
 }
@@ -117,6 +120,17 @@ func (b *Browser) fallbackToChromedp() error {
 	b.browserCtx, b.browserStop = nb.browserCtx, nb.browserStop
 	b.useGomoufox = false
 	return nil
+}
+
+// BackendKind 返回当前浏览器后端：gomoufox（默认）| nodriver | chromedp。
+func BackendKind() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SF_BROWSER"))) {
+	case "nodriver":
+		return "nodriver"
+	case "chromium", "chromedp", "patchright", "playwright":
+		return "chromedp"
+	}
+	return "gomoufox"
 }
 
 func newChromedpBrowser(opts BrowserOptions) (*Browser, error) {
@@ -258,6 +272,18 @@ func buildLocalStorageScript(o Origin) string {
 
 // FetchWithBrowser 用浏览器抓页面，返回 HTML 与 contentType。
 func (b *Browser) FetchWithBrowser(rawURL, sessionFile string) (string, string, error) {
+	// 说明：chromedp 通道暂不接 daemon（sfd --backend chromedp 仍可单独跑，
+	// 但客户端接入会偶发卡在启动探测上，先用进程内启动，约 6s）
+	if b.kind == "nodriver" {
+		html, ctype, err := FetchWithNodriver(rawURL, sessionFile, b.opts)
+		if err == nil {
+			return html, ctype, nil
+		}
+		fmt.Fprintf(os.Stderr, "[*] ⚠️ nodriver 失败，回退 Chromium: %v\n", err)
+		if err := b.fallbackToChromedp(); err != nil {
+			return "", "", err
+		}
+	}
 	if b.useGomoufox {
 		html, ctype, err := FetchWithGomoufox(rawURL, sessionFile, b.opts)
 		if err == nil {
