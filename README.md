@@ -3,6 +3,10 @@
 `sf` / `sv` 的 Go 实现，功能对齐 Python 版（`../super-fetch`、`../super-search`），
 与 Python 版**共用同一个数据目录**（`.data/links.db`、登录态、搜索 Cookie 都对得上）。
 
+## 文档
+
+- `BENCHMARK-TASK.md` — 抓取性能评测任务（sf vs 内置 web_fetch 的测法与口径）
+
 ## 浏览器后端（三种，SF_BROWSER 切换，默认 nodriver）
 
 | 后端 | 内核 | 冷启动 | 热启动 | 说明 |
