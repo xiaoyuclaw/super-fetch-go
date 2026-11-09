@@ -65,15 +65,29 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 		opts.Height = 900
 	}
 
+	// 优先走常驻 daemon：浏览器只启动一次
+	if html, ok := FetchViaDaemon(rawURL, sessionFile, opts.Timeout, 1.5); ok {
+		return html, "text/html", nil
+	}
+
 	// 浏览器冷启动 3–11 秒，超时给足
 	bootCtx, bootCancel := context.WithTimeout(context.Background(), time.Duration(opts.Timeout+90)*time.Second)
 	defer bootCancel()
 
+	debugTiming := os.Getenv("SF_DEBUG_TIME") == "1"
+	mark := time.Now()
+	tick := func(name string) {
+		if debugTiming {
+			fmt.Fprintf(os.Stderr, "[time] %-14s %5.2fs\n", name, time.Since(mark).Seconds())
+			mark = time.Now()
+		}
+	}
 	b, err := gomoufox.New(bootCtx)
 	if err != nil {
 		return "", "", fmt.Errorf("gomoufox 启动失败: %w", err)
 	}
 	defer b.Close()
+	tick("浏览器启动")
 
 	copts := []gomoufox.ContextOption{
 		gomoufox.WithViewport(opts.Width, 900),
@@ -88,6 +102,7 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 		return "", "", fmt.Errorf("gomoufox 新建页面失败: %w", err)
 	}
 	defer page.Close()
+	tick("new_page")
 
 	if _, err := page.Goto(bootCtx, rawURL,
 		gomoufox.WaitUntil("domcontentloaded"),
@@ -96,6 +111,7 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 		return "", "", err
 	}
 
+	tick("goto")
 	if opts.WaitSelector != "" {
 		waitSelectorGomoufox(bootCtx, page, opts.WaitSelector, 6*time.Second)
 	}
@@ -103,6 +119,7 @@ func FetchWithGomoufox(rawURL, sessionFile string, opts BrowserOptions) (string,
 		time.Sleep(600 * time.Millisecond)
 	}
 
+	tick("等待选择器")
 	html, err := page.Content(bootCtx)
 	if err != nil {
 		return "", "", err

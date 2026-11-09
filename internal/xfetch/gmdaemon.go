@@ -1,0 +1,150 @@
+package xfetch
+
+import (
+	"bufio"
+	"encoding/json"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type gmRequest struct {
+	URL     string  `json:"url"`
+	Session string  `json:"session"`
+	Timeout int     `json:"timeout"`
+	Wait    float64 `json:"wait"`
+}
+
+type gmResponse struct {
+	HTML  string `json:"html"`
+	Error string `json:"error"`
+}
+
+func gmSock() string {
+	if s := os.Getenv("SF_DAEMON_SOCK"); s != "" {
+		return s
+	}
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, "sf-gomoufox-"+strconv.Itoa(os.Getuid())+".sock")
+}
+
+// dshHostPID 向上找 DSH 宿主进程，daemon 随它退出。
+func dshHostPID() int {
+	pid := os.Getpid()
+	for i := 0; i < 12; i++ {
+		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err != nil {
+			return 0
+		}
+		// comm 字段可能含空格/括号，取最后一个 ')' 之后
+		s := string(data)
+		idx := strings.LastIndex(s, ")")
+		if idx < 0 {
+			return 0
+		}
+		fields := strings.Fields(s[idx+1:])
+		if len(fields) < 2 {
+			return 0
+		}
+		ppid, _ := strconv.Atoi(fields[1])
+		if ppid <= 1 {
+			return 0
+		}
+		cmd, _ := os.ReadFile("/proc/" + strconv.Itoa(ppid) + "/cmdline")
+		c := strings.ReplaceAll(string(cmd), "\x00", " ")
+		if strings.Contains(c, "dsh") && (strings.Contains(c, "web") || strings.Contains(c, "bin.ts")) {
+			return ppid
+		}
+		pid = ppid
+	}
+	return 0
+}
+
+// tryDaemon 发一条请求；daemon 不可用返回 false。
+func tryDaemon(url, session string, timeout int, wait float64) (string, bool) {
+	conn, err := net.DialTimeout("unix", gmSock(), 300*time.Millisecond)
+	if err != nil {
+		return "", false
+	}
+	defer conn.Close()
+	req := gmRequest{URL: url, Session: session, Timeout: timeout, Wait: wait}
+	data, _ := json.Marshal(req)
+	_ = conn.SetDeadline(time.Now().Add(time.Duration(timeout+60) * time.Second))
+	if _, err := conn.Write(append(data, '\n')); err != nil {
+		return "", false
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return "", false
+	}
+	var resp gmResponse
+	if json.Unmarshal(line, &resp) != nil || resp.Error != "" || resp.HTML == "" {
+		return "", false
+	}
+	return resp.HTML, true
+}
+
+// ensureDaemon 起一个常驻 daemon（已有则跳过），最多等 60 秒就绪。
+func ensureDaemon() bool {
+	if _, ok := tryDaemonPing(); ok {
+		return true
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	sfd := filepath.Join(filepath.Dir(exe), "sfd")
+	if _, err := os.Stat(sfd); err != nil {
+		if p, err := exec.LookPath("sfd"); err == nil {
+			sfd = p
+		} else {
+			return false
+		}
+	}
+	cmd := exec.Command(sfd, "--sock", gmSock(), "--dsh-pid", strconv.Itoa(dshHostPID()))
+	cmd.SysProcAttr = sysProcAttrDetach()
+	cmd.Stdout, cmd.Stderr = nil, nil
+	_ = cmd.Start()
+	return waitDaemon(60 * time.Second)
+}
+
+func tryDaemonPing() (string, bool) {
+	conn, err := net.DialTimeout("unix", gmSock(), 200*time.Millisecond)
+	if err != nil {
+		return "", false
+	}
+	conn.Close()
+	return "ok", true
+}
+
+func waitDaemon(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if _, ok := tryDaemonPing(); ok {
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false
+}
+
+// FetchViaDaemon 走常驻 daemon；SF_NO_DAEMON=1 时禁用。
+func FetchViaDaemon(url, session string, timeout int, wait float64) (string, bool) {
+	if os.Getenv("SF_NO_DAEMON") == "1" {
+		return "", false
+	}
+	if html, ok := tryDaemon(url, session, timeout, wait); ok {
+		return html, true
+	}
+	if !ensureDaemon() {
+		return "", false
+	}
+	return tryDaemon(url, session, timeout, wait)
+}
