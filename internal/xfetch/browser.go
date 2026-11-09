@@ -123,6 +123,7 @@ func (b *Browser) fallbackToChromedp() error {
 	b.allocCtx, b.allocStop = nb.allocCtx, nb.allocStop
 	b.browserCtx, b.browserStop = nb.browserCtx, nb.browserStop
 	b.useGomoufox = false
+	b.kind = "chromedp"
 	return nil
 }
 

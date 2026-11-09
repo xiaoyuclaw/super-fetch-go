@@ -172,7 +172,7 @@ func waitDaemon(backend string, d time.Duration) bool {
 
 // FetchViaDaemon 走常驻 daemon；SF_NO_DAEMON=1 时禁用。
 func FetchViaDaemon(backend, url, session, selector string, timeout int, wait float64) (string, bool) {
-	if os.Getenv("SF_NO_DAEMON") == "1" {
+	if os.Getenv("SF_NO_DAEMON") == "1" || backend == "" {
 		return "", false
 	}
 	if html, ok := tryDaemon(backend, url, session, selector, timeout, wait); ok {
