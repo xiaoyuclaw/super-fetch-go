@@ -1,7 +1,8 @@
 # 抓取性能评测任务（Benchmark Task）
 
 > 目的：给 `sf`（Go 版）和 DSH 内置 `web_fetch` 建立一套可复现的测速方法，
-> 覆盖「默认策略 / 默认引擎 / 其他策略 / 其他引擎」，并能公平地量出内置 `web_fetch` 的耗时。
+> 覆盖「默认策略 / 其他策略 / 三种浏览器后端」，并能公平地量出内置 `web_fetch` 的耗时。
+> **只测抓取（sf），不含搜索（sv）。**
 >
 > 这是一份**任务说明**，不是脚本。执行者按第 5 节跑、按第 6 节记、按第 8 节出结果。
 
@@ -9,15 +10,14 @@
 
 ## 1. 被测对象
 
-### A. sf（Go 版：`bin/sf`、`bin/sv`）
+### A. sf（Go 版：`bin/sf`）
 
 | 维度 | 取值 |
 |---|---|
 | 默认策略 | `sf "<url>"`（auto：cffi → 内嵌数据 → 浏览器兜底） |
-| 默认引擎 | `sv "<q>"`（当前默认顺序 bing → baidu → toutiao → 360 → sogou → shenma → ddg） |
 | 其他策略 | `--via http` / `--embedded` / `--discover` / `--via browser` / `--eval` / `-F` 批量 |
-| 其他引擎 | `sv "<q>" -e bing\|baidu\|toutiao\|shenma\|ddg`（360/sogou 本机 IP 被封，只记失败） |
 | 浏览器后端 | `SF_BROWSER=nodriver`（默认）/ `chromedp` / `gomoufox` |
+| 输出档位 | `-L brief` / `-L normal` / `-L full`（体积与 token 口径） |
 
 ### B. 内置 `web_fetch`
 
@@ -40,13 +40,7 @@ DSH 宿主进程内的工具，无 CLI。耗时必须从会话日志反推（见
 | 9 | 错误页 | `https://httpbin.org/status/404` | sf 应 rc=1；内置应报 HTTP 404 |
 | 10 | 重定向 | `https://httpbin.org/redirect/3` | 跟随并拿到最终页 |
 
-搜索语料（`sv`）固定 3 条：
-
-```
-python release notes      （英文技术，结果稳定）
-成都 天气                  （中文生活，结果稳定）
-DeepSeek V4 发布           （中文时效，考察新鲜度）
-```
+> 本任务只测 `sf`（抓取），不测 `sv`（搜索）。
 
 ---
 
@@ -97,21 +91,19 @@ done
 # 策略
 $SF "<url>" --via http          # 纯 HTTP
 $SF "<url>" --embedded          # SSR 注水数据（无则明确提示）
-$SF "<url>" --discover          # 接口探测
+$SF "<url>" --discover          # 接口探测（记录候选接口数量与耗时）
 $SF "<url>" --via browser       # 浏览器（默认 nodriver）
+$SF "<url>" --eval "document.title"   # CDP 求值（固定走 chromedp）
 
 # 后端
 SF_BROWSER=chromedp $SF "<url>" --via browser
 SF_BROWSER=gomoufox $SF "<url>" --via browser
 
-# 引擎（sv）
-SV=~/agents/xiaoyu/.agents/skills/super-fetch-go/bin/sv
-for e in bing baidu toutiao shenma ddg 360 sogou; do
-  $SV "python release notes" -e $e -j -n 5
-done
+# 批量（每次 3 个 URL，-c 2）
+$SF -F /tmp/urls.txt -c 2 --silent -j
 ```
 
-每条记录：`count`、`elapsed`（sv 自己报的）、`via`、是否成功。
+每条记录：通道（`-j` 的 `via` 或 stderr 的 `[cffi]/[playwright]`）、耗时、字符数、rc、是否成功。
 
 ### 5.3 内置 web_fetch 怎么量
 
@@ -217,8 +209,7 @@ sf 的 `-L brief` 是硬截断（800 字），可直接对比。会话日志里 
 | sf 浏览器（gomoufox 热） | 2.6s |
 | 内置 web_fetch：gov.cn | ~1.9s（含模型开销） |
 | 内置 web_fetch：36kr | 拿到「安全检测」页，判失败 |
-| sv 默认（bing，cffi） | 1.25s / 5 条 |
-| sv 浏览器（nodriver 热） | 4.2–5.3s / 5 条 |
+| sf 批量（2 URL，-c 2） | 0.46s（Go） |
 
 ---
 
@@ -238,6 +229,6 @@ sf 的 `-L brief` 是硬截断（800 字），可直接对比。会话日志里 
 
 1. 确认环境：`pgrep -xc sfd` ≤1、`echo $DISPLAY`、磁盘 ≥1G
 2. 跑 sf 语料：第 2 节 10 个 URL × {默认, --via http, --via browser}，记 5.1/5.2 数据
-3. 跑 sv 引擎：3 条查询 × 7 个引擎（cffi 与 browser 各一轮）
+3. 跑三种浏览器后端各一轮（nodriver / chromedp / gomoufox），冷热分开
 4. 跑内置 web_fetch：同一批 URL，串行调用，按 5.3 从日志取时间
 5. 填第 6 节表格，按第 7 节下结论，写进 `RESULTS-<日期>.md`
