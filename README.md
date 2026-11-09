@@ -25,6 +25,14 @@ SF_HEADLESS=virtual|true|false                 # gomoufox 默认 virtual
 `--eval`、`--discover`、`--embedded`、批量 `-F`、交互登录 `-i`、`sv` 浏览器通道。
 其中 `--eval` / `--discover` / `-i` 固定走 chromedp（需要 CDP），其余按 `SF_BROWSER` 选择。
 
+**Cookie / 登录态怎么算「通用」**：
+
+- 浏览器 profile **不共享**：三个后端各用各的临时 profile（nodriver/chromedp 在 `/tmp/sf-*`，
+  gomoufox 用它自己的），daemon 退出就清掉。
+- **session 文件（Playwright storageState）跨后端通用**：`-s 名字.json` 读入注入，
+  `--remember` 抓完写回；三种后端都已用 httpbin cookie 往返验证。
+- 不带 `-s` 时 cookie 只活在当前 daemon 的浏览器里，不落盘、换后端就没了。
+
 > 内存约束：这台机器只有 6G，**同一时间只保留一个 daemon**——
 > 切换后端时客户端会先杀掉其它后端的 daemon（按 `<sock>.pid`）。
 > 禁用 daemon：`SF_NO_DAEMON=1`。
