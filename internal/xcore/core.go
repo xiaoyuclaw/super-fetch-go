@@ -81,8 +81,8 @@ func DataDir() string {
 	return dataDirPath
 }
 
-// locateSharedDataDir 从可执行文件位置向上找「skills/super-fetch」，
-// 让 Go 版和 Python 版共用同一个 .data（链接库、接口库、登录态都在这）。
+// locateSharedDataDir 从可执行文件位置向上找同级的「super-fetch/.data」目录，
+// 让二进制被挪动后仍能找回链接库、接口库和登录态（Python 版已移除，这里只看 .data）。
 func locateSharedDataDir() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -94,7 +94,7 @@ func locateSharedDataDir() string {
 	dir := filepath.Dir(exe)
 	for i := 0; i < 5; i++ {
 		cand := filepath.Join(dir, "super-fetch")
-		if st, err := os.Stat(filepath.Join(cand, "core.py")); err == nil && !st.IsDir() {
+		if st, err := os.Stat(filepath.Join(cand, ".data")); err == nil && st.IsDir() {
 			return filepath.Join(cand, ".data")
 		}
 		parent := filepath.Dir(dir)

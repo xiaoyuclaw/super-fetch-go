@@ -1,7 +1,7 @@
-# super-fetch-go
+# super-fetch（Go 版）
 
-`sf` / `sv` 的 Go 实现，功能对齐 Python 版（`../super-fetch`、`../super-search`），
-与 Python 版**共用同一个数据目录**（`.data/links.db`、登录态、搜索 Cookie 都对得上）。
+`sf` / `sv` / `sfl` 的唯一实现。2026-11-10 起 Python 版已删除，本目录就是技能本体，
+数据在 `.data/`（`links.db`、登录态、搜索 Cookie）。
 
 ## 文档
 
@@ -47,7 +47,7 @@ SF_HEADLESS=virtual|true|false                 # gomoufox 默认 virtual
 ## 构建
 
 ```bash
-cd ~/agents/xiaoyu/.agents/skills/super-fetch-go
+cd ~/agents/xiaoyu/.agents/skills/super-fetch
 go build -o bin/sf  ./cmd/sf
 go build -o bin/sv  ./cmd/sv
 go build -o bin/sfl ./cmd/sfl
@@ -102,7 +102,7 @@ sv --clear-state                         # 清搜索 Cookie
 
 ## 数据目录
 
-默认 `../super-fetch/.data`（与 Python 版共享）。二进制被挪到别处、找不到同级的
+默认本目录的 `.data/`（二进制在别处时按同级 super-fetch/.data 找）。找不到时
 `super-fetch` 时，回退到 `~/.agents/super-fetch`；也可以显式指定：
 
 ```bash

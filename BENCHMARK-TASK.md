@@ -133,7 +133,7 @@ for p in sys.argv[1:]:
 ### 5.1 sf 单 URL
 
 ```bash
-SF=~/agents/xiaoyu/.agents/skills/super-fetch-go/bin/sf
+SF=~/agents/xiaoyu/.agents/skills/super-fetch/bin/sf
 for i in 1 2 3; do
   /usr/bin/time -f "%e" $SF "<url>" -L full -o /tmp/out-$i.md 2>/tmp/err-$i.txt
 done
